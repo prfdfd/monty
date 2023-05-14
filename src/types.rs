@@ -134,12 +134,6 @@ impl fmt::Display for Value {
     }
 }
 
-impl Default for Value {
-    fn default() -> Self {
-        Self::Undefined
-    }
-}
-
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -171,29 +165,29 @@ impl From<bool> for Value {
 }
 
 impl Value {
-    pub fn add(self, other: Self) -> Option<Self> {
+    pub fn add(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Self::Int(v1 + v2)),
-            (Self::Str(mut v1), Self::Str(v2)) => {
-                v1.push_str(&v2);
-                Some(Self::Str(v1))
+            (Self::Str(v1), Self::Str(v2)) => {
+                Some(Self::Str(format!("{}{}", v1, v2)))
             }
-            (Self::List(mut v1), Self::List(v2)) => {
-                v1.extend(v2);
-                Some(Self::List(v1))
+            (Self::List(v1), Self::List(v2)) => {
+                let mut v = v1.clone();
+                v.extend(v2.clone());
+                Some(Self::List(v))
             }
             _ => None,
         }
     }
 
-    pub fn sub(self, other: Self) -> Option<Self> {
+    pub fn sub(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Int(v1), Self::Int(v2)) => Some(Self::Int(v1 - v2)),
             _ => None,
         }
     }
 
-    pub fn eq(self, other: Self) -> Option<Self> {
+    pub fn eq(&self, other: &Self) -> Option<Self> {
         match (self, other) {
             (Self::Undefined, _) => None,
             (_, Self::Undefined) => None,
@@ -217,11 +211,11 @@ impl Value {
             }
             (Self::Range(v1), Self::Range(v2)) => Some((v1 == v2).into()),
             (Self::True, Self::True) => Some(Self::True),
-            (Self::True, Self::Int(v2)) => Some((1 == v2).into()),
-            (Self::Int(v1), Self::True) => Some((v1 == 1).into()),
+            (Self::True, Self::Int(v2)) => Some((1 == *v2).into()),
+            (Self::Int(v1), Self::True) => Some((*v1 == 1).into()),
             (Self::False, Self::False) => Some(Self::True),
-            (Self::False, Self::Int(v2)) => Some((0 == v2).into()),
-            (Self::Int(v1), Self::False) => Some((v1 == 0).into()),
+            (Self::False, Self::Int(v2)) => Some((0 == *v2).into()),
+            (Self::Int(v1), Self::False) => Some((*v1 == 0).into()),
             (Self::None, Self::None) => Some(Self::True),
             _ => Some(Self::False),
         }

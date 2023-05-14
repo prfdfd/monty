@@ -18,7 +18,7 @@ struct Frame {
 impl Frame {
     fn new(namespace_size: usize) -> Self {
         Self {
-            namespace: vec![Value::default(); namespace_size],
+            namespace: vec![Value::Undefined; namespace_size],
         }
     }
 
@@ -29,29 +29,34 @@ impl Frame {
         Ok(())
     }
 
-    fn execute_node(&mut self, node: &RunNode) -> RunResult<Value> {
+    fn execute_node(&mut self, node: &RunNode) -> RunResult<()> {
         match node {
-            Node::Pass => Err("Unexpected `pass` in execution".into()),
-            Node::Expr(expr) => self.execute_expr(expr),
-            Node::Assign { target, value } => self.assign(*target, value),
+            Node::Pass => return Err("Unexpected `pass` in execution".into()),
+            Node::Expr(expr) => {
+                self.execute_expr(expr)?;
+            },
+            Node::Assign { target, value } => {
+                self.assign(*target, value)?;
+            },
             Node::For {
                 target,
                 iter,
                 body,
                 or_else,
-            } => self.for_loop(target, iter, body, or_else),
-            Node::If { test, body, or_else } => self.if_(test, body, or_else),
-        }
+            } => self.for_loop(target, iter, body, or_else)?,
+            Node::If { test, body, or_else } => self.if_(test, body, or_else)?,
+        };
+        Ok(())
     }
 
-    fn execute_expr(&self, expr: &RunExpr) -> RunResult<Value> {
+    fn execute_expr<'a>(&'a self, expr: &'a RunExpr) -> RunResult<Cow<Value>> {
         match expr {
-            Expr::Constant(value) => Ok(value.clone()),
+            Expr::Constant(value) => Ok(Cow::Borrowed(value)),
             Expr::Name(id) => {
                 if let Some(value) = self.namespace.get(*id) {
                     match value {
                         Value::Undefined => Err(format!("name '{}' is not defined", id).into()),
-                        _ => Ok(value.clone()),
+                        _ => Ok(Cow::Borrowed(value)),
                     }
                 } else {
                     Err(format!("name '{}' is not defined", id).into())
@@ -62,19 +67,26 @@ impl Frame {
             Expr::List(elements) => {
                 let values = elements
                     .iter()
-                    .map(|e| self.execute_expr(e))
+                    .map(|e| match self.execute_expr(e) {
+                        Ok(Cow::Borrowed(value)) => Ok(value.clone()),
+                        Ok(Cow::Owned(value)) => Ok(value),
+                        Err(e) => Err(e),
+                    })
                     .collect::<RunResult<_>>()?;
-                Ok(Value::List(values))
+                Ok(Cow::Owned(Value::List(values)))
             }
         }
     }
 
-    fn assign(&mut self, target: usize, value: &RunExpr) -> RunResult<Value> {
-        self.namespace[target] = self.execute_expr(value)?;
-        Ok(Value::Undefined)
+    fn assign(&mut self, target: usize, value: &RunExpr) -> RunResult<()> {
+        self.namespace[target] = match self.execute_expr(value)? {
+            Cow::Borrowed(value) => value.clone(),
+            Cow::Owned(value) => value,
+        };
+        Ok(())
     }
 
-    fn call_function(&self, builtin: &Builtins, args: &[RunExpr]) -> RunResult<Value> {
+    fn call_function(&self, builtin: &Builtins, args: &[RunExpr]) -> RunResult<Cow<Value>> {
         match builtin {
             Builtins::Print => {
                 for (i, arg) in args.iter().enumerate() {
@@ -86,15 +98,15 @@ impl Frame {
                     }
                 }
                 println!();
-                Ok(Value::None)
+                Ok(Cow::Owned(Value::None))
             }
             Builtins::Range => {
                 if args.len() != 1 {
                     Err("range() takes exactly one argument".into())
                 } else {
                     let value = self.execute_expr(&args[0])?;
-                    match value {
-                        Value::Int(size) => Ok(Value::Range(size)),
+                    match value.as_ref() {
+                        Value::Int(size) => Ok(Cow::Owned(Value::Range(*size))),
                         _ => Err("range() argument must be an integer".into()),
                     }
                 }
@@ -108,13 +120,13 @@ impl Frame {
         iter: &RunExpr,
         body: &[RunNode],
         _or_else: &[RunNode],
-    ) -> RunResult<Value> {
+    ) -> RunResult<()> {
         let target_id = match target {
             Expr::Name(id) => *id,
             _ => return Err("For target must be a name".into()),
         };
-        let range_size = match self.execute_expr(iter)? {
-            Value::Range(s) => s,
+        let range_size = match self.execute_expr(iter)?.as_ref() {
+            Value::Range(s) => *s,
             _ => return Err("For iter must be a range".into()),
         };
 
@@ -122,10 +134,10 @@ impl Frame {
             self.namespace[target_id] = Value::Int(value);
             self.execute(body)?;
         }
-        Ok(Value::None)
+        Ok(())
     }
 
-    fn if_(&mut self, test: &RunExpr, body: &[RunNode], or_else: &[RunNode]) -> RunResult<Value> {
+    fn if_(&mut self, test: &RunExpr, body: &[RunNode], or_else: &[RunNode]) -> RunResult<()> {
         let test = self.execute_expr(test)?;
         if test
             .bool()
@@ -135,17 +147,17 @@ impl Frame {
         } else {
             self.execute(or_else)?;
         }
-        Ok(Value::None)
+        Ok(())
     }
 
-    fn op(&self, left: &RunExpr, op: &Operator, right: &RunExpr) -> RunResult<Value> {
+    fn op(&self, left: &RunExpr, op: &Operator, right: &RunExpr) -> RunResult<Cow<Value>> {
         let left_value = self.execute_expr(left)?;
         let right_value = self.execute_expr(right)?;
         let op_value: Option<Value> = match op {
-            Operator::Add => left_value.add(right_value),
-            Operator::Sub => left_value.sub(right_value),
-            Operator::Eq => left_value.eq(right_value),
-            Operator::NotEq => match left_value.eq(right_value) {
+            Operator::Add => left_value.add(&right_value),
+            Operator::Sub => left_value.sub(&right_value),
+            Operator::Eq => left_value.as_ref().eq(&right_value),
+            Operator::NotEq => match left_value.as_ref().eq(&right_value) {
                 Some(value) => value.invert(),
                 None => None,
             },
@@ -157,7 +169,7 @@ impl Frame {
             _ => return Err(format!("Operator {op:?} not yet implemented").into()),
         };
         match op_value {
-            Some(value) => Ok(value),
+            Some(value) => Ok(Cow::Owned(value)),
             None => Err(format!("Cannot apply operator {left:?} {op:?} {right:?}").into()),
         }
     }

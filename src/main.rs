@@ -27,7 +27,7 @@ fn main() -> ExitCode {
         }
     };
     let nodes = parse(&code, None).unwrap();
-    dbg!(&nodes);
+    // dbg!(&nodes);
     let (namespace_size, nodes) = prepare(nodes).unwrap();
     // dbg!(namespace_size, &nodes);
     let tic = Instant::now();
