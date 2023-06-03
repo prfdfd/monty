@@ -17,13 +17,13 @@ pub use crate::types::Exit;
 use crate::types::Node;
 
 #[derive(Debug)]
-pub struct Executor<'a> {
+pub struct Executor<'c> {
     initial_namespace: Vec<Object>,
-    nodes: Vec<Node<'a>>,
+    nodes: Vec<Node<'c>>,
 }
 
-impl<'a> Executor<'a> {
-    pub fn new(code: &'a str, filename: &'a str, input_names: &[&str]) -> ParseResult<'a, Self> {
+impl<'c> Executor<'c> {
+    pub fn new(code: &'c str, filename: &'c str, input_names: &[&str]) -> ParseResult<'c, Self> {
         let nodes = parse(code, filename)?;
         // dbg!(&nodes);
         let (initial_namespace, nodes) = prepare(nodes, input_names)?;
@@ -34,7 +34,7 @@ impl<'a> Executor<'a> {
         })
     }
 
-    pub fn run(&self, inputs: Vec<Object>) -> Result<Exit, InternalRunError> {
+    pub fn run(&self, inputs: Vec<Object>) -> Result<Exit<'c>, InternalRunError> {
         let mut namespace = self.initial_namespace.clone();
         for (i, input) in inputs.into_iter().enumerate() {
             namespace[i] = input;
@@ -42,10 +42,7 @@ impl<'a> Executor<'a> {
         match RunFrame::new(namespace).execute(&self.nodes) {
             Ok(v) => Ok(v),
             Err(e) => match e {
-                RunError::Exc(exc) => {
-                    // Ok(Exit::Raise(exc))
-                    todo!("Exception: {}", exc);
-                },
+                RunError::Exc(exc) => Ok(Exit::Raise(exc)),
                 RunError::Internal(internal) => Err(internal),
             },
         }

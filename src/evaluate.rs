@@ -7,16 +7,16 @@ use crate::object::Object;
 use crate::run::RunResult;
 use crate::types::{Builtins, CmpOperator, Expr, ExprLoc, Function, Kwarg, Operator};
 
-pub(crate) struct Evaluator<'o> {
-    namespace: &'o [Object],
+pub(crate) struct Evaluator<'d> {
+    namespace: &'d [Object],
 }
 
-impl<'o> Evaluator<'o> {
-    pub fn new(namespace: &'o [Object]) -> Self {
+impl<'d> Evaluator<'d> {
+    pub fn new(namespace: &'d [Object]) -> Self {
         Self { namespace }
     }
 
-    pub fn evaluate<'a>(&self, expr_loc: &'o ExprLoc<'a>) -> RunResult<'a, Cow<'o, Object>> {
+    pub fn evaluate<'c>(&self, expr_loc: &'d ExprLoc<'c>) -> RunResult<'c, Cow<'d, Object>> {
         match &expr_loc.expr {
             Expr::Constant(object) => Ok(Cow::Borrowed(object)),
             Expr::Name(ident) => {
@@ -45,14 +45,14 @@ impl<'o> Evaluator<'o> {
         }
     }
 
-    pub fn evaluate_bool<'a>(&self, expr_loc: &'o ExprLoc<'a>) -> RunResult<'a, bool> {
+    pub fn evaluate_bool<'c>(&self, expr_loc: &'d ExprLoc<'c>) -> RunResult<'c, bool> {
         match &expr_loc.expr {
             Expr::CmpOp { left, op, right } => self.cmp_op(left, op, right),
             _ => self.evaluate(expr_loc)?.as_ref().bool(),
         }
     }
 
-    fn op<'a>(&self, left: &'o ExprLoc<'a>, op: &'o Operator, right: &'o ExprLoc<'a>) -> RunResult<'a, Cow<'o, Object>> {
+    fn op<'c>(&self, left: &'d ExprLoc<'c>, op: &'d Operator, right: &'d ExprLoc<'c>) -> RunResult<'c, Cow<'d, Object>> {
         let left_object = self.evaluate(left)?;
         let right_object = self.evaluate(right)?;
         let op_object: Option<Object> = match op {
@@ -67,7 +67,7 @@ impl<'o> Evaluator<'o> {
         }
     }
 
-    fn cmp_op<'a>(&self, left: &'o ExprLoc<'a>, op: &'o CmpOperator, right: &'o ExprLoc<'a>) -> RunResult<'a, bool> {
+    fn cmp_op<'c>(&self, left: &'d ExprLoc<'c>, op: &'d CmpOperator, right: &'d ExprLoc<'c>) -> RunResult<'c, bool> {
         let left_object = self.evaluate(left)?;
         let right_object = self.evaluate(right)?;
         let op_object: Option<bool> = match op {
@@ -85,14 +85,14 @@ impl<'o> Evaluator<'o> {
         }
     }
 
-    fn _op_type_error<'a, T>(
+    fn _op_type_error<'c, T>(
         &self,
-        left: &'o ExprLoc<'a>,
+        left: &'d ExprLoc<'c>,
         op: impl fmt::Display,
-        right: &'o ExprLoc<'a>,
-        left_object: Cow<'o, Object>,
-        right_object: Cow<'o, Object>,
-    ) -> RunResult<'a, T> {
+        right: &'d ExprLoc<'c>,
+        left_object: Cow<'d, Object>,
+        right_object: Cow<'d, Object>,
+    ) -> RunResult<'c, T> {
         let left_type = left_object.type_str();
         let right_type = right_object.type_str();
         let new_position  = left.position.extend(&right.position);
@@ -103,12 +103,12 @@ impl<'o> Evaluator<'o> {
         )
     }
 
-    pub fn call_function<'a>(
+    pub fn call_function<'c>(
         &self,
-        function: &'o Function,
-        args: &'o [ExprLoc<'a>],
-        _kwargs: &'o [Kwarg],
-    ) -> RunResult<'a, Cow<'o, Object>> {
+        function: &'d Function,
+        args: &'d [ExprLoc<'c>],
+        _kwargs: &'d [Kwarg],
+    ) -> RunResult<'c, Cow<'d, Object>> {
         let builtin = match function {
             Function::Builtin(builtin) => builtin,
             Function::Ident(_) => {
