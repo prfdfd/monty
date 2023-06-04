@@ -1,6 +1,8 @@
+mod builtins;
 mod evaluate;
 mod exceptions;
 mod object;
+mod operators;
 mod parse;
 mod parse_error;
 mod prepare;

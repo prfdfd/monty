@@ -3,8 +3,9 @@ use std::borrow::Cow;
 use crate::evaluate::Evaluator;
 use crate::exceptions::{exc, exc_err, Exception, InternalRunError, RunError, StackFrame};
 use crate::object::Object;
+use crate::operators::Operator;
 use crate::parse::CodeRange;
-use crate::types::{Exit, ExprLoc, Identifier, Node, Operator};
+use crate::types::{Exit, ExprLoc, Identifier, Node};
 
 pub type RunResult<'c, T> = Result<T, RunError<'c>>;
 

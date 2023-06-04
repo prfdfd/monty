@@ -1,6 +1,7 @@
-use crate::exceptions::{ExceptionRaise, InternalRunError, RunError};
 use std::borrow::Cow;
 use std::fmt;
+
+use crate::exceptions::{ExceptionRaise, InternalRunError, RunError};
 
 #[derive(Debug, Clone)]
 pub enum ParseError<'c> {

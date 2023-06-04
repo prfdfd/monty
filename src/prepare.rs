@@ -2,11 +2,13 @@ use std::collections::hash_map::Entry;
 
 use ahash::AHashMap;
 
+use crate::builtins::Builtins;
 use crate::evaluate::Evaluator;
 use crate::exceptions::exc_err;
 use crate::object::Object;
+use crate::operators::{CmpOperator, Operator};
 use crate::parse_error::{ParseError, ParseResult};
-use crate::types::{Builtins, CmpOperator, Expr, ExprLoc, Function, Identifier, Kwarg, Node, Operator};
+use crate::types::{Expr, ExprLoc, Function, Identifier, Kwarg, Node};
 
 pub(crate) fn prepare<'c>(nodes: Vec<Node<'c>>, input_names: &[&str]) -> ParseResult<'c, (Vec<Object>, Vec<Node<'c>>)> {
     let mut p = Prepare::new(nodes.len(), input_names, true);

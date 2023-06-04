@@ -1,10 +1,12 @@
 use std::borrow::Cow;
 
+use crate::builtins::Builtins;
 use crate::exceptions::exc_err;
 use crate::exceptions::{Exception, InternalRunError};
 use crate::object::Object;
+use crate::operators::{CmpOperator, Operator};
 use crate::run::RunResult;
-use crate::types::{Builtins, CmpOperator, Expr, ExprLoc, Function, Kwarg, Operator};
+use crate::types::{Expr, ExprLoc, Function, Kwarg};
 
 pub(crate) struct Evaluator<'d> {
     namespace: &'d [Object],
