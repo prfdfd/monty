@@ -5,6 +5,7 @@ use crate::expressions::ExprLoc;
 use crate::object::{string_repr, Object};
 use crate::parse::CodeRange;
 use crate::run::RunResult;
+use crate::Heap;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,9 +81,9 @@ impl SimpleException {
         left: &'d ExprLoc<'c>,
         op: impl fmt::Display,
         right: &'d ExprLoc<'c>,
-        left_object: Cow<'d, Object>,
-        right_object: Cow<'d, Object>,
-        heap: &crate::heap::Heap,
+        left_object: Object,
+        right_object: Object,
+        heap: &Heap,
     ) -> RunResult<'c, T> {
         let left_type = left_object.type_str(heap);
         let right_type = right_object.type_str(heap);

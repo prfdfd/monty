@@ -328,12 +328,7 @@ impl Object {
     ///
     /// This method requires heap access to work with heap-allocated objects and
     /// to generate accurate error messages.
-    pub(crate) fn attr_call<'c, 'd>(
-        &mut self,
-        heap: &mut Heap,
-        attr: &Attr,
-        args: Vec<Cow<'d, Self>>,
-    ) -> RunResult<'c, Cow<'d, Object>> {
+    pub(crate) fn attr_call<'c>(&mut self, heap: &mut Heap, attr: &Attr, args: Vec<Self>) -> RunResult<'c, Object> {
         use crate::heap::HeapData;
 
         match (self, attr) {
@@ -342,7 +337,7 @@ impl Object {
                 let obj_id = *id; // Copy the ID to avoid borrow issues
                 if let HeapData::List(list) = heap.get_mut(obj_id) {
                     if args.len() == 1 {
-                        let item = args[0].clone().into_owned();
+                        let item = args[0].clone();
                         // Store the item_id if it's a Ref, to inc_ref after releasing the borrow
                         let item_id_opt = if let Self::Ref(item_id) = &item {
                             Some(*item_id)
@@ -355,7 +350,7 @@ impl Object {
                         if let Some(item_id) = item_id_opt {
                             heap.inc_ref(item_id);
                         }
-                        Ok(Cow::Owned(Self::None))
+                        Ok(Self::None)
                     } else {
                         exc_err_fmt!(ExcType::TypeError; "{attr} takes exactly exactly one argument ({} given)", args.len())
                     }
@@ -369,7 +364,7 @@ impl Object {
                 if let HeapData::List(list) = heap.get_mut(obj_id) {
                     if args.len() == 2 {
                         let index = args[0].as_int()? as usize;
-                        let item = args[1].clone().into_owned();
+                        let item = args[1].clone();
                         // Store the item_id if it's a Ref, to inc_ref after releasing the borrow
                         let item_id_opt = if let Self::Ref(item_id) = &item {
                             Some(*item_id)
@@ -382,7 +377,7 @@ impl Object {
                         if let Some(item_id) = item_id_opt {
                             heap.inc_ref(item_id);
                         }
-                        Ok(Cow::Owned(Self::None))
+                        Ok(Self::None)
                     } else {
                         exc_err_fmt!(ExcType::TypeError; "{attr} expected 2 arguments, got {}", args.len())
                     }
@@ -394,7 +389,7 @@ impl Object {
             (Self::Ref(id), Attr::Foobar) => {
                 let id = *id;
                 if let HeapData::List(list) = heap.get(id) {
-                    Ok(Cow::Owned(Object::Int(list.len() as i64)))
+                    Ok(Object::Int(list.len() as i64))
                 } else {
                     let type_str = Self::Ref(id).type_str(heap);
                     exc_err_fmt!(ExcType::AttributeError; "'{}' object has no attribute '{attr}'", type_str)

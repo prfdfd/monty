@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use crate::evaluate::{evaluate, evaluate_bool};
+use crate::evaluate::{evaluate_bool, evaluate_discard, evaluate_use};
 use crate::exceptions::{
     exc_err_static, exc_fmt, internal_err, ExcType, InternalRunError, RunError, SimpleException, StackFrame,
 };
@@ -41,9 +39,12 @@ impl<'c> RunFrame<'c> {
         match node {
             Node::Pass => return internal_err!(InternalRunError::Error; "Unexpected `pass` in execution"),
             Node::Expr(expr) => {
-                self.execute_expr(heap, expr)?;
+                if let Err(mut e) = evaluate_discard(&mut self.namespace, heap, expr) {
+                    set_name(self.name, &mut e);
+                    return Err(e);
+                }
             }
-            Node::Return(expr) => return Ok(Some(Exit::Return(self.execute_expr(heap, expr)?.into_owned()))),
+            Node::Return(expr) => return Ok(Some(Exit::Return(self.execute_expr(heap, expr)?))),
             Node::ReturnNone => return Ok(Some(Exit::ReturnNone)),
             Node::Raise(exc) => self.raise(heap, exc.as_ref())?,
             Node::Assign { target, object } => {
@@ -63,9 +64,9 @@ impl<'c> RunFrame<'c> {
         Ok(None)
     }
 
-    fn execute_expr<'d>(&'d mut self, heap: &'d mut Heap, expr: &'d ExprLoc<'c>) -> RunResult<'c, Cow<'d, Object>> {
+    fn execute_expr<'d>(&'d mut self, heap: &'d mut Heap, expr: &'d ExprLoc<'c>) -> RunResult<'c, Object> {
         // it seems the struct creation is optimized away, and has no cost
-        match evaluate(&mut self.namespace, heap, expr) {
+        match evaluate_use(&mut self.namespace, heap, expr) {
             Ok(object) => Ok(object),
             Err(mut e) => {
                 set_name(self.name, &mut e);
@@ -87,7 +88,7 @@ impl<'c> RunFrame<'c> {
     fn raise(&mut self, heap: &mut Heap, op_exc_expr: Option<&ExprLoc<'c>>) -> RunResult<'c, ()> {
         if let Some(exc_expr) = op_exc_expr {
             let object = self.execute_expr(heap, exc_expr)?;
-            match object.into_owned() {
+            match object {
                 Object::Exc(exc) => Err(exc.with_frame(self.stack_frame(&exc_expr.position)).into()),
                 _ => exc_err_static!(ExcType::TypeError; "exceptions must derive from BaseException"),
             }
@@ -97,7 +98,7 @@ impl<'c> RunFrame<'c> {
     }
 
     fn assign(&mut self, heap: &mut Heap, target: &Identifier<'c>, expr: &ExprLoc<'c>) -> RunResult<'c, ()> {
-        self.namespace[target.id] = self.execute_expr(heap, expr)?.into_owned();
+        self.namespace[target.id] = self.execute_expr(heap, expr)?;
         Ok(())
     }
 
@@ -109,7 +110,7 @@ impl<'c> RunFrame<'c> {
         expr: &ExprLoc<'c>,
     ) -> RunResult<'c, ()> {
         // TODO ideally we wouldn't need to clone here since add_mut could take a cow
-        let right_object = self.execute_expr(heap, expr)?.into_owned();
+        let right_object = self.execute_expr(heap, expr)?;
         if let Some(target_object) = self.namespace.get_mut(target.id) {
             let r = match op {
                 Operator::Add => target_object.add_mut(right_object, heap),
@@ -137,9 +138,8 @@ impl<'c> RunFrame<'c> {
         body: &[Node<'c>],
         _or_else: &[Node<'c>],
     ) -> RunResult<'c, ()> {
-        let range_size = match self.execute_expr(heap, iter)?.as_ref() {
-            Object::Range(s) => *s,
-            _ => return internal_err!(InternalRunError::TodoError; "`for` iter must be a range"),
+        let Object::Range(range_size) = self.execute_expr(heap, iter)? else {
+            return internal_err!(InternalRunError::TodoError; "`for` iter must be a range");
         };
 
         for object in 0i64..range_size {

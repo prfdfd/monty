@@ -86,6 +86,11 @@ bytes_equal: "(b'aa' == b'aa', b'aa' == b'bb')", "tuple: (True, False)";
 bytes_equal2: "(b'aa' == b'aa', b'aa' == b'aaa')", "tuple: (True, False)";
 list_equal: "([1, 2] == [1, 2], [1] == [1, 2])", "tuple: (True, False)";
 tuple_equal: "((1, 2) == (1, 2), (1, 2) == (2, 1))", "tuple: (True, False)";
+discard_list: "
+a = 1
+[1, 2, 3]
+a
+", "int: 1";
 }
 
 macro_rules! execute_raise_tests {
