@@ -12,9 +12,6 @@ mod parse_error;
 mod prepare;
 mod run;
 
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 use crate::exceptions::{InternalRunError, RunError};
 pub use crate::exit::{Exit, Value};
 use crate::expressions::Node;

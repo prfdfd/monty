@@ -128,7 +128,7 @@ impl<'c> RunFrame<'c> {
                 Ok(())
             }
         } else {
-            let e = SimpleException::new(ExcType::NameError, Some(target.name.to_string().into()));
+            let e = SimpleException::new(ExcType::NameError, Some(target.name.clone().into()));
             Err(e.with_frame(self.stack_frame(&target.position)).into())
         }
     }

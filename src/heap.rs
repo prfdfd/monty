@@ -32,12 +32,10 @@ impl HeapData {
             (Self::Str(s1), Self::Str(s2)) => s1 == s2,
             (Self::Bytes(b1), Self::Bytes(b2)) => b1 == b2,
             (Self::List(elements1), Self::List(elements2)) => {
-                elements1.len() == elements2.len()
-                    && elements1.iter().zip(elements2).all(|(i1, i2)| (i1.py_eq(i2, heap)))
+                elements1.len() == elements2.len() && elements1.iter().zip(elements2).all(|(i1, i2)| i1.py_eq(i2, heap))
             }
             (Self::Tuple(elements1), Self::Tuple(elements2)) => {
-                elements1.len() == elements2.len()
-                    && elements1.iter().zip(elements2).all(|(i1, i2)| (i1.py_eq(i2, heap)))
+                elements1.len() == elements2.len() && elements1.iter().zip(elements2).all(|(i1, i2)| i1.py_eq(i2, heap))
             }
             _ => false,
         }
