@@ -26,7 +26,7 @@ id_tests! {
     singleton_true: "id(True) == id(True)", "bool: True";
     singleton_false: "id(False) == id(False)", "bool: True";
     singleton_ellipsis: "id(...) == id(...)", "bool: True";
-    singleton_distinct: "(id(None), id(True), id(False), id(...))", "tuple: (2, 3, 4, 1)";
+    singleton_distinct: "(id(...), id(None), id(False), id(True))", "tuple: (1, 2, 3, 4)";
 
     // Inline values (Int, Float) - each literal creates distinct boxed identity when id() called
     int_literals_distinct: "id(10) == id(20)", "bool: False";
@@ -95,4 +95,20 @@ r2 = r1
     // Different types have different IDs
     mixed_types: "id(1) == id('1')", "bool: False";
     bool_vs_int: "(id(True) == id(1), id(False) == id(0))", "tuple: (False, False)";
+    empty_list_id: "id([]) == id([])", "bool: False";
+
+    // is test
+    is_test: "True is True", "bool: True";
+    is_not_test: "True is not True", "bool: False";
+    is_array_test: "[] is []", "bool: False";
+    is_boolean_test: "([] is []) is False", "bool: True";
+    is_none_is_false: "None is False", "bool: False";
+    is_none_is_none: "None is None", "bool: True";
+    is_number_is_number: "1 is 1", "bool: False";
+    is_list_mutate: "
+a = [1, 2]
+b = a
+b.append(3)
+a is b
+", "bool: True";
 }

@@ -23,8 +23,7 @@ pub enum Object {
     Undefined,
     Ellipsis,
     None,
-    True,
-    False,
+    Bool(bool),
     Int(i64),
     Float(f64),
     Range(i64),
@@ -41,10 +40,8 @@ impl PartialOrd for Object {
             (Self::Float(s), Self::Float(o)) => s.partial_cmp(o),
             (Self::Int(s), Self::Float(o)) => (*s as f64).partial_cmp(o),
             (Self::Float(s), Self::Int(o)) => s.partial_cmp(&(*o as f64)),
-            (Self::True, _) => Self::Int(1).partial_cmp(other),
-            (Self::False, _) => Self::Int(0).partial_cmp(other),
-            (_, Self::True) => self.partial_cmp(&Self::Int(1)),
-            (_, Self::False) => self.partial_cmp(&Self::Int(0)),
+            (Self::Bool(s), _) => Self::Int(i64::from(*s)).partial_cmp(other),
+            (_, Self::Bool(s)) => self.partial_cmp(&Self::Int(i64::from(*s))),
             // Ref comparison requires heap context, not supported in PartialOrd
             (Self::Ref(_), Self::Ref(_)) => None,
             _ => None,
@@ -54,11 +51,7 @@ impl PartialOrd for Object {
 
 impl From<bool> for Object {
     fn from(v: bool) -> Self {
-        if v {
-            Self::True
-        } else {
-            Self::False
-        }
+        Self::Bool(v)
     }
 }
 
@@ -176,12 +169,9 @@ impl Object {
             (_, Self::Undefined) => false,
             (Self::Int(v1), Self::Int(v2)) => v1 == v2,
             (Self::Range(v1), Self::Range(v2)) => v1 == v2,
-            (Self::True, Self::True) => true,
-            (Self::True, Self::Int(v2)) => 1 == *v2,
-            (Self::Int(v1), Self::True) => *v1 == 1,
-            (Self::False, Self::False) => true,
-            (Self::False, Self::Int(v2)) => 0 == *v2,
-            (Self::Int(v1), Self::False) => *v1 == 0,
+            (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
+            (Self::Bool(v1), Self::Int(v2)) => i64::from(*v1) == *v2,
+            (Self::Int(v1), Self::Bool(v2)) => *v1 == i64::from(*v2),
             (Self::None, Self::None) => true,
             (Self::Ref(id1), Self::Ref(id2)) => (*id1 == *id2) || heap.get(*id1).py_eq(heap.get(*id2), heap),
             _ => false,
@@ -201,8 +191,7 @@ impl Object {
             Self::Undefined => false,
             Self::Ellipsis => true,
             Self::None => false,
-            Self::True => true,
-            Self::False => false,
+            Self::Bool(b) => *b,
             Self::Int(v) => *v != 0,
             Self::Float(f) => *f != 0.0,
             Self::Range(v) => *v != 0,
@@ -309,8 +298,7 @@ impl Object {
             // Singletons have constant IDs
             Self::Ellipsis => 1,
             Self::None => 2,
-            Self::True => 3,
-            Self::False => 4,
+            Self::Bool(b) => usize::from(*b) + 3,
             // Already heap-allocated, return id plus 5
             Self::Ref(id) => *id + 5,
             // Everything else (Int, Float, Range, Exc) needs to be boxed
@@ -324,6 +312,11 @@ impl Object {
                 new_id
             }
         }
+    }
+
+    /// Equivalent of Python's `is` method.
+    pub fn is(&mut self, heap: &mut Heap, other: &mut Self) -> bool {
+        self.id(heap) == other.id(heap)
     }
 
     /// TODO maybe replace with TryFrom
@@ -345,8 +338,7 @@ impl Object {
             Self::Undefined => "undefined",
             Self::Ellipsis => "ellipsis",
             Self::None => "NoneType",
-            Self::True => "bool",
-            Self::False => "bool",
+            Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::Range(_) => "range",
@@ -480,8 +472,7 @@ impl Object {
             Self::Undefined => Self::Undefined,
             Self::Ellipsis => Self::Ellipsis,
             Self::None => Self::None,
-            Self::True => Self::True,
-            Self::False => Self::False,
+            Self::Bool(b) => Self::Bool(*b),
             Self::Int(v) => Self::Int(*v),
             Self::Float(v) => Self::Float(*v),
             Self::Range(v) => Self::Range(*v),
@@ -495,8 +486,8 @@ impl Object {
             Self::Undefined => "Undefined".into(),
             Self::Ellipsis => "...".into(),
             Self::None => "None".into(),
-            Self::True => "True".into(),
-            Self::False => "False".into(),
+            Self::Bool(true) => "True".into(),
+            Self::Bool(false) => "False".into(),
             Self::Int(v) => format!("{v}").into(),
             Self::Float(v) => format!("{v}").into(),
             Self::Range(size) => format!("0:{size}").into(),

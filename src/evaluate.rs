@@ -152,8 +152,8 @@ fn cmp_op<'c, 'd>(
     op: &'d CmpOperator,
     right: &'d ExprLoc<'c>,
 ) -> RunResult<'c, bool> {
-    let left_object = evaluate_use(namespace, heap, left)?;
-    let right_object = evaluate_use(namespace, heap, right)?;
+    let mut left_object = evaluate_use(namespace, heap, left)?;
+    let mut right_object = evaluate_use(namespace, heap, right)?;
     match op {
         CmpOperator::Eq => Ok(left_object.py_eq(&right_object, heap)),
         CmpOperator::NotEq => Ok(!left_object.py_eq(&right_object, heap)),
@@ -161,6 +161,8 @@ fn cmp_op<'c, 'd>(
         CmpOperator::GtE => Ok(left_object.ge(&right_object)),
         CmpOperator::Lt => Ok(left_object.lt(&right_object)),
         CmpOperator::LtE => Ok(left_object.le(&right_object)),
+        CmpOperator::Is => Ok(left_object.is(heap, &mut right_object)),
+        CmpOperator::IsNot => Ok(!left_object.is(heap, &mut right_object)),
         CmpOperator::ModEq(v) => match left_object.modulus_eq(&right_object, *v) {
             Some(b) => Ok(b),
             None => SimpleException::operand_type_error(left, Operator::Mod, right, left_object, right_object, heap),
