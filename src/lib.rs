@@ -70,6 +70,7 @@ impl<'c> Executor<'c> {
         for (i, input) in inputs.into_iter().enumerate() {
             namespace[i] = input;
         }
+        // dbg!(&self.nodes, &self.heap);
 
         match RunFrame::new(namespace).execute(&mut self.heap, &self.nodes) {
             Ok(v) => Ok(Exit::new(v, &self.heap)),

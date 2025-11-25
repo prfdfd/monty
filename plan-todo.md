@@ -5,8 +5,8 @@
 - [x] Phase 1: Introduce heap arena + reference counting fundamentals.
 - [x] Phase 2: Thread heap through evaluator and execution engine.
 - [x] Phase 3: Move heap-worthy types (list → str/bytes → dict/set/frozenset → tuple/exception) into `HeapData` and update cloning/assignment helpers.
-- [ ] Phase 3.5: Move heap-worthy Object variants (list/tuple/str/bytes/exception) into `HeapData`.
-- [ ] Phase 4: Support `is`/`is not` via object identity.
+- [x] Phase 3.5: Move heap-worthy Object variants (list/tuple/str/bytes/exception) into `HeapData`.
+- [x] Phase 4: Support `is`/`is not` via object identity.
 - [ ] Phase 5: Update list/string mutation paths to work with shared references.
 - [ ] Phase 6: Move exceptions onto the heap.
 - [ ] Phase 7: Optional integer caching (if still relevant with immediates).

@@ -58,6 +58,15 @@ If you see a comment or docstring that's out of date - you MUST update it to be 
 
 NOTE: COMMENTS AND DOCSTRINGS ARE EXTREMELY IMPORTANT TO THE LONG TERM HEALTH OF THE PROJECT.
 
+## Tests
+
+Tests should always be as concise as possible while covering all possible cases.
+
+Review other tests in the same file or elsewhere in `tests/` and follow the same styles.
+
+In particular, use macros as shown in `tests/main.rs` to allow you to create many tests without them becoming
+too repetitive, verbose and hard to read and update.
+
 ## NOTES
 
 ALWAYS run `make lint` after making changes and fix all suggestions to maintain code quality.

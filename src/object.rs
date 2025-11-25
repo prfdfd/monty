@@ -23,8 +23,7 @@ pub enum Object {
     Undefined,
     Ellipsis,
     None,
-    True,
-    False,
+    Bool(bool),
     Int(i64),
     Float(f64),
     Range(i64),
@@ -41,10 +40,8 @@ impl PartialOrd for Object {
             (Self::Float(s), Self::Float(o)) => s.partial_cmp(o),
             (Self::Int(s), Self::Float(o)) => (*s as f64).partial_cmp(o),
             (Self::Float(s), Self::Int(o)) => s.partial_cmp(&(*o as f64)),
-            (Self::True, _) => Self::Int(1).partial_cmp(other),
-            (Self::False, _) => Self::Int(0).partial_cmp(other),
-            (_, Self::True) => self.partial_cmp(&Self::Int(1)),
-            (_, Self::False) => self.partial_cmp(&Self::Int(0)),
+            (Self::Bool(s), _) => Self::Int(i64::from(*s)).partial_cmp(other),
+            (_, Self::Bool(s)) => self.partial_cmp(&Self::Int(i64::from(*s))),
             // Ref comparison requires heap context, not supported in PartialOrd
             (Self::Ref(_), Self::Ref(_)) => None,
             _ => None,
@@ -54,11 +51,7 @@ impl PartialOrd for Object {
 
 impl From<bool> for Object {
     fn from(v: bool) -> Self {
-        if v {
-            Self::True
-        } else {
-            Self::False
-        }
+        Self::Bool(v)
     }
 }
 
@@ -176,12 +169,9 @@ impl Object {
             (_, Self::Undefined) => false,
             (Self::Int(v1), Self::Int(v2)) => v1 == v2,
             (Self::Range(v1), Self::Range(v2)) => v1 == v2,
-            (Self::True, Self::True) => true,
-            (Self::True, Self::Int(v2)) => 1 == *v2,
-            (Self::Int(v1), Self::True) => *v1 == 1,
-            (Self::False, Self::False) => true,
-            (Self::False, Self::Int(v2)) => 0 == *v2,
-            (Self::Int(v1), Self::False) => *v1 == 0,
+            (Self::Bool(v1), Self::Bool(v2)) => v1 == v2,
+            (Self::Bool(v1), Self::Int(v2)) => i64::from(*v1) == *v2,
+            (Self::Int(v1), Self::Bool(v2)) => *v1 == i64::from(*v2),
             (Self::None, Self::None) => true,
             (Self::Ref(id1), Self::Ref(id2)) => (*id1 == *id2) || heap.get(*id1).py_eq(heap.get(*id2), heap),
             _ => false,
@@ -201,13 +191,13 @@ impl Object {
             Self::Undefined => false,
             Self::Ellipsis => true,
             Self::None => false,
-            Self::True => true,
-            Self::False => false,
+            Self::Bool(b) => *b,
             Self::Int(v) => *v != 0,
             Self::Float(f) => *f != 0.0,
             Self::Range(v) => *v != 0,
             Self::Exc(_) => true,
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().bool(heap),
                 HeapData::Str(s) => !s.is_empty(),
                 HeapData::Bytes(b) => !b.is_empty(),
                 HeapData::List(items) => !items.is_empty(),
@@ -249,6 +239,7 @@ impl Object {
 
         match self {
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().len(heap),
                 HeapData::Str(s) => Some(s.len()),
                 HeapData::Bytes(b) => Some(b.len()),
                 HeapData::List(items) => Some(items.len()),
@@ -266,6 +257,7 @@ impl Object {
     pub fn repr<'h>(&self, heap: &'h Heap) -> Cow<'h, str> {
         match self {
             Self::Ref(id) => match heap.get(*id) {
+                HeapData::Object(obj) => obj.as_ref().repr(heap),
                 HeapData::Str(s) => string_repr(s).into(),
                 HeapData::Bytes(b) => format!("b'{b:?}'").into(),
                 HeapData::List(items) => repr_sequence('[', ']', items, heap).into(),
@@ -289,6 +281,44 @@ impl Object {
         self.repr(heap)
     }
 
+    /// Returns a stable, unique identifier for this object, boxing it to the heap if necessary.
+    ///
+    /// Should match Python's `id()` function.
+    ///
+    /// For inline values (Int, Float, Range), this method allocates them to the heap on first call
+    /// and replaces `self` with an `Object::Ref` pointing to the boxed value. This ensures that
+    /// subsequent calls to `id()` return the same stable heap address.
+    ///
+    /// Singletons (None, True, False, etc.) return constant IDs without heap allocation.
+    /// Already heap-allocated objects (Ref) return their existing ObjectId.
+    pub fn id(&mut self, heap: &mut Heap) -> usize {
+        match self {
+            // should not be used in practice
+            Self::Undefined => 0,
+            // Singletons have constant IDs
+            Self::Ellipsis => 1,
+            Self::None => 2,
+            Self::Bool(b) => usize::from(*b) + 3,
+            // Already heap-allocated, return id plus 5
+            Self::Ref(id) => *id + 5,
+            // Everything else (Int, Float, Range, Exc) needs to be boxed
+            _ => {
+                // Clone the current value before replacing it
+                let boxed = Box::new(self.clone());
+                let new_id = heap.allocate(HeapData::Object(boxed));
+                // Replace self with a Ref to the newly allocated heap object
+                *self = Self::Ref(new_id);
+                // again return id plus 5
+                new_id
+            }
+        }
+    }
+
+    /// Equivalent of Python's `is` method.
+    pub fn is(&mut self, heap: &mut Heap, other: &mut Self) -> bool {
+        self.id(heap) == other.id(heap)
+    }
+
     /// TODO maybe replace with TryFrom
     pub fn as_int(&self) -> RunResult<'static, i64> {
         match self {
@@ -308,13 +338,12 @@ impl Object {
             Self::Undefined => "undefined",
             Self::Ellipsis => "ellipsis",
             Self::None => "NoneType",
-            Self::True => "bool",
-            Self::False => "bool",
+            Self::Bool(_) => "bool",
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::Range(_) => "range",
             Self::Exc(e) => e.type_str(),
-            Self::Ref(id) => heap.get(*id).type_str(),
+            Self::Ref(id) => heap.get(*id).type_str(heap),
         }
     }
 
@@ -322,7 +351,7 @@ impl Object {
     ///
     /// This method requires heap access to work with heap-allocated objects and
     /// to generate accurate error messages.
-    pub(crate) fn attr_call<'c>(&mut self, heap: &mut Heap, attr: &Attr, args: Vec<Self>) -> RunResult<'c, Object> {
+    pub fn attr_call<'c>(&mut self, heap: &mut Heap, attr: &Attr, args: Vec<Self>) -> RunResult<'c, Object> {
         use crate::heap::HeapData;
 
         match (self, attr) {
@@ -443,8 +472,7 @@ impl Object {
             Self::Undefined => Self::Undefined,
             Self::Ellipsis => Self::Ellipsis,
             Self::None => Self::None,
-            Self::True => Self::True,
-            Self::False => Self::False,
+            Self::Bool(b) => Self::Bool(*b),
             Self::Int(v) => Self::Int(*v),
             Self::Float(v) => Self::Float(*v),
             Self::Range(v) => Self::Range(*v),
@@ -458,8 +486,8 @@ impl Object {
             Self::Undefined => "Undefined".into(),
             Self::Ellipsis => "...".into(),
             Self::None => "None".into(),
-            Self::True => "True".into(),
-            Self::False => "False".into(),
+            Self::Bool(true) => "True".into(),
+            Self::Bool(false) => "False".into(),
             Self::Int(v) => format!("{v}").into(),
             Self::Float(v) => format!("{v}").into(),
             Self::Range(size) => format!("0:{size}").into(),
@@ -470,7 +498,7 @@ impl Object {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum Attr {
+pub enum Attr {
     Append,
     Insert,
     Foobar,
@@ -508,7 +536,7 @@ macro_rules! string_replace_common {
     };
 }
 
-pub(crate) fn string_repr(s: &str) -> String {
+pub fn string_repr(s: &str) -> String {
     // Check if the string contains single quotes but not double quotes
     if s.contains('\'') && !s.contains('"') {
         // Use double quotes if string contains only single quotes

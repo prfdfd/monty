@@ -151,8 +151,7 @@ impl TryFrom<&Value<'_>> for bool {
 
     fn try_from(value: &Value<'_>) -> Result<Self, Self::Error> {
         match value.object {
-            Object::True => Ok(true),
-            Object::False => Ok(false),
+            Object::Bool(b) => Ok(b),
             _ => Err(ConversionError::new("bool", value.type_str())),
         }
     }

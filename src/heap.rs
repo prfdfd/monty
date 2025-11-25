@@ -6,6 +6,9 @@ pub type ObjectId = usize;
 /// HeapData captures every runtime object that must live in the arena.
 #[derive(Debug, Clone)]
 pub enum HeapData {
+    /// Boxed object used when id() is called on inline values (Int, Float, Range, etc.)
+    /// to provide them with a stable heap address and unique identity.
+    Object(Box<Object>),
     Str(String),
     Bytes(Vec<u8>),
     List(Vec<Object>),
@@ -16,8 +19,9 @@ pub enum HeapData {
 impl HeapData {
     /// Debug representation of the data type
     #[must_use]
-    pub fn type_str(&self) -> &'static str {
+    pub fn type_str(&self, heap: &Heap) -> &'static str {
         match self {
+            Self::Object(obj) => obj.as_ref().type_str(heap),
             Self::Str(_) => "str",
             Self::Bytes(_) => "bytes",
             Self::List(_) => "list",
@@ -29,6 +33,7 @@ impl HeapData {
     #[must_use]
     pub fn py_eq(&self, other: &Self, heap: &Heap) -> bool {
         match (self, other) {
+            (Self::Object(obj1), Self::Object(obj2)) => obj1.py_eq(obj2, heap),
             (Self::Str(s1), Self::Str(s2)) => s1 == s2,
             (Self::Bytes(b1), Self::Bytes(b2)) => b1 == b2,
             (Self::List(elements1), Self::List(elements2)) => {
@@ -141,6 +146,12 @@ impl Heap {
 /// `dec_ref` can recursively drop entire object graphs without recursion.
 fn enqueue_children(data: &HeapData, stack: &mut Vec<ObjectId>) {
     match data {
+        HeapData::Object(obj) => {
+            // Boxed objects may contain heap references
+            if let Object::Ref(id) = obj.as_ref() {
+                stack.push(*id);
+            }
+        }
         HeapData::List(items) | HeapData::Tuple(items) => {
             // Walk through all items and enqueue any heap-allocated objects
             for obj in items {
