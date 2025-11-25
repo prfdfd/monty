@@ -343,7 +343,7 @@ impl Object {
             Self::Float(_) => "float",
             Self::Range(_) => "range",
             Self::Exc(e) => e.type_str(),
-            Self::Ref(id) => heap.get(*id).type_str(),
+            Self::Ref(id) => heap.get(*id).type_str(heap),
         }
     }
 

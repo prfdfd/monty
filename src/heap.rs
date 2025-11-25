@@ -19,14 +19,9 @@ pub enum HeapData {
 impl HeapData {
     /// Debug representation of the data type
     #[must_use]
-    pub fn type_str(&self) -> &'static str {
+    pub fn type_str(&self, heap: &Heap) -> &'static str {
         match self {
-            Self::Object(obj) => match obj.as_ref() {
-                Object::Int(_) => "int",
-                Object::Float(_) => "float",
-                Object::Range(_) => "range",
-                _ => panic!("unexpected object type in HeapData::Object"),
-            },
+            Self::Object(obj) => obj.as_ref().type_str(heap),
             Self::Str(_) => "str",
             Self::Bytes(_) => "bytes",
             Self::List(_) => "list",
@@ -151,6 +146,12 @@ impl Heap {
 /// `dec_ref` can recursively drop entire object graphs without recursion.
 fn enqueue_children(data: &HeapData, stack: &mut Vec<ObjectId>) {
     match data {
+        HeapData::Object(obj) => {
+            // Boxed objects may contain heap references
+            if let Object::Ref(id) = obj.as_ref() {
+                stack.push(*id);
+            }
+        }
         HeapData::List(items) | HeapData::Tuple(items) => {
             // Walk through all items and enqueue any heap-allocated objects
             for obj in items {
@@ -158,9 +159,6 @@ fn enqueue_children(data: &HeapData, stack: &mut Vec<ObjectId>) {
                     stack.push(*id);
                 }
             }
-        }
-        HeapData::Object(_) => {
-            // heap objects must be simple constants and shouldn't ever contain nested objects
         }
         HeapData::Str(_) | HeapData::Bytes(_) => {
             // Strings and bytes don't contain nested objects
