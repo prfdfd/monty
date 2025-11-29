@@ -32,6 +32,7 @@ paste = "1.0.7"
 pyo3 = { version = "0.19.0", features = ["auto-initialize"] }
 criterion = "0.5"
 datatest-stable = "0.2"
+pprof = { version = "0.15", features = ["flamegraph", "criterion"] }
 
 [[bench]]
 name = "main"
@@ -45,7 +46,11 @@ harness = false
 lto = "fat"
 codegen-units = 1
 strip = true
-#debug = true
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
 
 [lints.clippy]
 # dbg_macro = "warn"

@@ -40,5 +40,13 @@ test-ref-counting: ## Run tests with ref-counting enabled
 complete-tests: ## Fill in incomplete test expectations using CPython
 	uv run scripts/complete_tests.py
 
+.PHONY: bench
+bench: ## Run benchmarks
+	cargo bench --bench main
+
+.PHONY: profile
+profile: ## Profile the code with pprof and generate flamegraphs
+	cargo bench --bench main --profile profiling -- --profile-time=5
+
 .PHONY: all
 all: lint test

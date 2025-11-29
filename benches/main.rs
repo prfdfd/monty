@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Bencher, Criterion};
-
 use monty::Executor;
+use pprof::criterion::{Output, PProfProfiler};
 
 use pyo3::prelude::*;
 
@@ -262,5 +262,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group!(
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    targets = criterion_benchmark
+);
 criterion_main!(benches);
