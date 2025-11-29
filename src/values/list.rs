@@ -16,7 +16,7 @@ use crate::values::PyValue;
 /// When objects are added to the list (via append, insert, etc.), their
 /// reference counts are incremented if they are heap-allocated (Ref variants).
 /// This ensures objects remain valid while referenced by the list.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct List(Vec<Object>);
 
 impl List {
@@ -56,37 +56,43 @@ impl List {
         self.0.is_empty()
     }
 
+    /// Creates a deep clone of this list with proper reference counting.
+    ///
+    /// All heap-allocated objects in the list have their reference counts
+    /// incremented. This should be used instead of `.clone()` which would
+    /// bypass reference counting.
+    #[must_use]
+    pub fn clone_with_heap(&self, heap: &mut Heap) -> Self {
+        let cloned: Vec<Object> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        Self(cloned)
+    }
+
     /// Appends an element to the end of the list.
     ///
-    /// If the item is a heap-allocated object (Ref variant), its reference
-    /// count is incremented automatically.
+    /// The caller transfers ownership of `item` to the list. The item's refcount
+    /// is NOT incremented here - the caller is responsible for ensuring the refcount
+    /// was already incremented (e.g., via `clone_with_heap` or `evaluate_use`).
     ///
     /// Returns `Object::None`, matching Python's behavior where `list.append()` returns None.
-    pub fn append(&mut self, heap: &mut Heap, item: Object) -> Object {
-        // Increment refcount if item is heap-allocated
-        if let Object::Ref(item_id) = &item {
-            heap.inc_ref(*item_id);
-        }
+    pub fn append(&mut self, _heap: &mut Heap, item: Object) -> Object {
+        // Ownership transfer - refcount was already handled by caller
         self.0.push(item);
         Object::None
     }
 
     /// Inserts an element at the specified index.
     ///
-    /// If the item is a heap-allocated object (Ref variant), its reference
-    /// count is incremented automatically.
+    /// The caller transfers ownership of `item` to the list. The item's refcount
+    /// is NOT incremented here - the caller is responsible for ensuring the refcount
+    /// was already incremented.
     ///
     /// # Arguments
     /// * `index` - The position to insert at (0-based). If index >= len(),
     ///   the item is appended to the end (matching Python semantics).
     ///
     /// Returns `Object::None`, matching Python's behavior where `list.insert()` returns None.
-    pub fn insert(&mut self, heap: &mut Heap, index: usize, item: Object) -> Object {
-        // Increment refcount if item is heap-allocated
-        if let Object::Ref(item_id) = &item {
-            heap.inc_ref(*item_id);
-        }
-
+    pub fn insert(&mut self, _heap: &mut Heap, index: usize, item: Object) -> Object {
+        // Ownership transfer - refcount was already handled by caller
         // Python's insert() appends if index is out of bounds
         if index >= self.0.len() {
             self.0.push(item);
@@ -134,38 +140,42 @@ impl PyValue for List {
     }
 
     fn py_add(&self, other: &Self, heap: &mut Heap) -> Option<Object> {
-        let mut result = self.0.clone();
-        result.extend_from_slice(other.as_vec());
-        for obj in &result {
-            if let Object::Ref(id) = obj {
-                heap.inc_ref(*id);
-            }
-        }
+        // Clone both lists' contents with proper refcounting
+        let mut result: Vec<Object> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        let other_cloned: Vec<Object> = other.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        result.extend(other_cloned);
         let id = heap.allocate(HeapData::List(List::from_vec(result)));
         Some(Object::Ref(id))
     }
 
     fn py_iadd(&mut self, other: Object, heap: &mut Heap, self_id: Option<ObjectId>) -> Result<(), Object> {
-        let rhs = match other {
-            Object::Ref(other_id) => {
-                if Some(other_id) == self_id {
-                    self.0.clone()
-                } else if let HeapData::List(list) = heap.get(other_id) {
-                    list.as_vec().clone()
-                } else {
-                    return Err(Object::Ref(other_id));
-                }
-            }
+        // Extract the object ID first, keeping `other` around to drop later
+        let other_id = match &other {
+            Object::Ref(id) => *id,
             _ => return Err(other),
         };
 
-        for obj in &rhs {
-            if let Object::Ref(id) = obj {
-                heap.inc_ref(*id);
+        let rhs: Vec<Object> = if Some(other_id) == self_id {
+            // Self-extend: clone our own items with proper refcounting
+            self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect()
+        } else {
+            // Get items from other list - use copy_for_extend to avoid borrow conflict
+            let items = match heap.get(other_id) {
+                HeapData::List(list) => list.as_vec().iter().map(Object::copy_for_extend).collect::<Vec<_>>(),
+                _ => return Err(other),
+            };
+            // Now increment refcounts for Ref variants (borrow released)
+            for obj in &items {
+                if let Object::Ref(id) = obj {
+                    heap.inc_ref(*id);
+                }
             }
-        }
+            items
+        };
 
         self.0.extend(rhs);
+        // Drop the other object - we've extracted its contents and are done with the temporary reference
+        other.drop_with_heap(heap);
         Ok(())
     }
 

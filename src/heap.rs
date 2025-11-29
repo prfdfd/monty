@@ -222,7 +222,7 @@ impl PyValue for HeapData {
         }
     }
 
-    fn py_getitem(&self, key: &Object, heap: &Heap) -> RunResult<'static, Object> {
+    fn py_getitem(&self, key: &Object, heap: &mut Heap) -> RunResult<'static, Object> {
         match self {
             Self::Object(obj) => obj.py_getitem(key, heap),
             Self::Str(s) => s.py_getitem(key, heap),
@@ -250,10 +250,17 @@ impl PyValue for HeapData {
 /// The `cached_hash` field is used to store precomputed hashes for immutable types
 /// (Str, Bytes, Tuple) to allow them to be used as dict keys. Mutable types (List, Dict)
 /// have `cached_hash = None` and will raise TypeError if used as dict keys.
+///
+/// The `data` field is an Option to support temporary borrowing: when methods like
+/// `with_entry_mut` or `call_attr` need mutable access to both the data and the heap,
+/// they can `.take()` the data out (leaving `None`), pass `&mut Heap` to user code,
+/// then restore the data. This avoids unsafe code while keeping `refcount` accessible
+/// for `inc_ref`/`dec_ref` during the borrow.
 #[derive(Debug)]
 struct HeapObject {
     refcount: usize,
-    data: HeapData,
+    /// The payload data. Temporarily `None` while borrowed via `with_entry_mut`/`call_attr`.
+    data: Option<HeapData>,
     /// Cached hash value for immutable types, None for mutable types
     cached_hash: Option<u64>,
 }
@@ -269,6 +276,32 @@ pub struct Heap {
     objects: Vec<Option<HeapObject>>,
 }
 
+macro_rules! take_data {
+    ($self:ident, $id:expr, $func_name:literal) => {
+        $self
+            .objects
+            .get_mut($id)
+            .expect(concat!("Heap::", $func_name, ": slot missing"))
+            .as_mut()
+            .expect(concat!("Heap::", $func_name, ": object already freed"))
+            .data
+            .take()
+            .expect(concat!("Heap::", $func_name, ": data already borrowed"))
+    };
+}
+
+macro_rules! restore_data {
+    ($self:ident, $id:expr, $new_data:expr, $func_name:literal) => {{
+        let entry = $self
+            .objects
+            .get_mut($id)
+            .expect(concat!("Heap::", $func_name, ": slot missing"))
+            .as_mut()
+            .expect(concat!("Heap::", $func_name, ": object already freed"));
+        entry.data = Some($new_data);
+    }};
+}
+
 impl Heap {
     /// Allocates a new heap object, returning the fresh identifier.
     ///
@@ -280,7 +313,7 @@ impl Heap {
         let id = self.objects.len();
         self.objects.push(Some(HeapObject {
             refcount: 1,
-            data,
+            data: Some(data),
             cached_hash,
         }));
         id
@@ -314,8 +347,11 @@ impl Heap {
                 continue;
             }
 
+            // refcount == 1, free the object
             if let Some(object) = slot.take() {
-                enqueue_children(&object.data, &mut stack);
+                if let Some(data) = object.data {
+                    enqueue_children(&data, &mut stack);
+                }
             }
         }
     }
@@ -323,30 +359,34 @@ impl Heap {
     /// Returns an immutable reference to the heap data stored at the given ID.
     ///
     /// # Panics
-    /// Panics if the object ID is invalid or the object has already been freed.
+    /// Panics if the object ID is invalid, the object has already been freed,
+    /// or the data is currently borrowed via `with_entry_mut`/`call_attr`.
     #[must_use]
     pub fn get(&self, id: ObjectId) -> &HeapData {
-        &self
-            .objects
+        self.objects
             .get(id)
             .expect("Heap::get: slot missing")
             .as_ref()
             .expect("Heap::get: object already freed")
             .data
+            .as_ref()
+            .expect("Heap::get: data currently borrowed")
     }
 
     /// Returns a mutable reference to the heap data stored at the given ID.
     ///
     /// # Panics
-    /// Panics if the object ID is invalid or the object has already been freed.
+    /// Panics if the object ID is invalid, the object has already been freed,
+    /// or the data is currently borrowed via `with_entry_mut`/`call_attr`.
     pub fn get_mut(&mut self, id: ObjectId) -> &mut HeapData {
-        &mut self
-            .objects
+        self.objects
             .get_mut(id)
             .expect("Heap::get_mut: slot missing")
             .as_mut()
             .expect("Heap::get_mut: object already freed")
             .data
+            .as_mut()
+            .expect("Heap::get_mut: data currently borrowed")
     }
 
     /// Returns the cached hash for the heap object at the given ID.
@@ -370,29 +410,39 @@ impl Heap {
     /// borrow checker conflict that arises when attribute implementations also need
     /// mutable access to the heap (e.g. for refcounting).
     pub fn call_attr<'c>(&mut self, id: ObjectId, attr: &Attr, args: Vec<Object>) -> RunResult<'c, Object> {
-        let mut entry = {
-            let slot = self.objects.get_mut(id).expect("Heap::call_attr: slot missing");
-            slot.take().expect("Heap::call_attr: object already freed")
-        };
-        let result = entry.data.py_call_attr(self, attr, args);
-        let slot = self.objects.get_mut(id).expect("Heap::call_attr: slot missing");
-        *slot = Some(entry);
+        // Take data out in a block so the borrow of self.objects ends
+        let mut data = take_data!(self, id, "call_attr");
+
+        let result = data.py_call_attr(self, attr, args);
+
+        // Restore data
+        let entry = self
+            .objects
+            .get_mut(id)
+            .expect("Heap::call_attr: slot missing")
+            .as_mut()
+            .expect("Heap::call_attr: object already freed");
+        entry.data = Some(data);
         result
     }
 
     /// Gives mutable access to a heap entry while allowing reentrant heap usage
     /// inside the closure (e.g. to read other objects or allocate results).
     ///
-    /// The entry is temporarily removed from the heap, so the closure can safely
+    /// The data is temporarily taken from the heap entry, so the closure can safely
     /// mutate both the entry data and the heap (e.g. to allocate new objects).
-    /// The entry is automatically restored after the closure completes.
+    /// The data is automatically restored after the closure completes.
     pub fn with_entry_mut<F, R>(&mut self, id: ObjectId, f: F) -> R
     where
         F: FnOnce(&mut Heap, &mut HeapData) -> R,
     {
-        let mut entry = self.take_entry(id);
-        let result = f(self, &mut entry.data);
-        self.restore_entry(id, entry);
+        // Take data out in a block so the borrow of self.objects ends
+        let mut data = take_data!(self, id, "with_entry_mut");
+
+        let result = f(self, &mut data);
+
+        // Restore data
+        restore_data!(self, id, data, "with_entry_mut");
         result
     }
 
@@ -405,30 +455,25 @@ impl Heap {
         F: FnOnce(&mut Heap, &HeapData, &HeapData) -> R,
     {
         if left == right {
-            let entry = self.take_entry(left);
-            let data = &entry.data;
-            let result = f(self, data, data);
-            self.restore_entry(left, entry);
+            // Same object - take data once and pass it twice
+            let data = take_data!(self, left, "with_two");
+
+            let result = f(self, &data, &data);
+
+            restore_data!(self, left, data, "with_two");
             result
         } else {
-            let left_entry = self.take_entry(left);
-            let right_entry = self.take_entry(right);
-            let result = f(self, &left_entry.data, &right_entry.data);
-            self.restore_entry(right, right_entry);
-            self.restore_entry(left, left_entry);
+            // Different objects - take both
+            let left_data = take_data!(self, left, "with_two (left)");
+            let right_data = take_data!(self, right, "with_two (right)");
+
+            let result = f(self, &left_data, &right_data);
+
+            // Restore in reverse order
+            restore_data!(self, right, right_data, "with_two (right)");
+            restore_data!(self, left, left_data, "with_two (left)");
             result
         }
-    }
-
-    fn take_entry(&mut self, id: ObjectId) -> HeapObject {
-        let slot = self.objects.get_mut(id).expect("Heap::take_entry: slot missing");
-        slot.take().expect("Heap::take_entry: object already freed")
-    }
-
-    fn restore_entry(&mut self, id: ObjectId, entry: HeapObject) {
-        let slot = self.objects.get_mut(id).expect("Heap::restore_entry: slot missing");
-        debug_assert!(slot.is_none(), "Heap slot should be empty before restore");
-        *slot = Some(entry);
     }
 
     /// Removes all objects and resets the ID counter, used between executor runs.

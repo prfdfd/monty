@@ -21,7 +21,7 @@ use crate::values::PyValue;
 /// # Reference Counting
 /// When a tuple is freed, all contained heap references have their refcounts
 /// decremented via `push_stack_ids`.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Tuple(Vec<Object>);
 
 impl Tuple {
@@ -38,6 +38,17 @@ impl Tuple {
     #[must_use]
     pub fn as_vec(&self) -> &Vec<Object> {
         &self.0
+    }
+
+    /// Creates a deep clone of this tuple with proper reference counting.
+    ///
+    /// All heap-allocated objects in the tuple have their reference counts
+    /// incremented. This should be used instead of `.clone()` which would
+    /// bypass reference counting.
+    #[must_use]
+    pub fn clone_with_heap(&self, heap: &mut Heap) -> Self {
+        let cloned: Vec<Object> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
+        Self(cloned)
     }
 }
 

@@ -98,8 +98,11 @@ pub trait PyValue {
     /// Returns the value associated with the key, or an error if the key doesn't exist
     /// or the type doesn't support subscripting.
     ///
+    /// The `&mut Heap` parameter is needed for proper reference counting when cloning
+    /// the returned value.
+    ///
     /// Default implementation returns TypeError.
-    fn py_getitem(&self, _key: &Object, heap: &Heap) -> RunResult<'static, Object> {
+    fn py_getitem(&self, _key: &Object, heap: &mut Heap) -> RunResult<'static, Object> {
         Err(ExcType::type_error_not_sub(self.py_type(heap)))
     }
 

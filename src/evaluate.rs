@@ -60,7 +60,11 @@ pub(crate) fn evaluate_use<'c, 'd>(
         Expr::Subscript { object, index } => {
             let obj = evaluate_use(namespace, heap, object)?;
             let key = evaluate_use(namespace, heap, index)?;
-            obj.py_getitem(&key, heap)
+            let result = obj.py_getitem(&key, heap);
+            // Drop temporary references to object and key
+            obj.drop_with_heap(heap);
+            key.drop_with_heap(heap);
+            result
         }
         Expr::Dict(pairs) => {
             let mut eval_pairs = Vec::new();
@@ -147,7 +151,10 @@ pub(crate) fn evaluate_bool<'c, 'd>(
         cmp_op(namespace, heap, left, op, right)
     } else {
         let obj = evaluate_use(namespace, heap, expr_loc)?;
-        Ok(obj.py_bool(heap))
+        let result = obj.py_bool(heap);
+        // Drop temporary reference
+        obj.drop_with_heap(heap);
+        Ok(result)
     }
 }
 
@@ -165,10 +172,20 @@ fn eval_op<'c, 'd>(
         Operator::Add => left_object.py_add(&right_object, heap),
         Operator::Sub => left_object.py_sub(&right_object, heap),
         Operator::Mod => left_object.py_mod(&right_object),
-        _ => return internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented"),
+        _ => {
+            // Drop temporary references before early return
+            left_object.drop_with_heap(heap);
+            right_object.drop_with_heap(heap);
+            return internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented");
+        }
     };
     match op_object {
-        Some(object) => Ok(object),
+        Some(object) => {
+            // Drop temporary references to operands now that the operation is complete
+            left_object.drop_with_heap(heap);
+            right_object.drop_with_heap(heap);
+            Ok(object)
+        }
         None => SimpleException::operand_type_error(left, op, right, left_object, right_object, heap),
     }
 }
@@ -183,21 +200,40 @@ fn cmp_op<'c, 'd>(
 ) -> RunResult<'c, bool> {
     let mut left_object = evaluate_use(namespace, heap, left)?;
     let mut right_object = evaluate_use(namespace, heap, right)?;
-    match op {
-        CmpOperator::Eq => Ok(left_object.py_eq(&right_object, heap)),
-        CmpOperator::NotEq => Ok(!left_object.py_eq(&right_object, heap)),
-        CmpOperator::Gt => Ok(left_object.gt(&right_object)),
-        CmpOperator::GtE => Ok(left_object.ge(&right_object)),
-        CmpOperator::Lt => Ok(left_object.lt(&right_object)),
-        CmpOperator::LtE => Ok(left_object.le(&right_object)),
-        CmpOperator::Is => Ok(left_object.is(heap, &mut right_object)),
-        CmpOperator::IsNot => Ok(!left_object.is(heap, &mut right_object)),
-        CmpOperator::ModEq(v) => match left_object.py_mod_eq(&right_object, *v) {
-            Some(b) => Ok(b),
+
+    // For ModEq, handle separately since error path consumes the objects
+    if let CmpOperator::ModEq(v) = op {
+        return match left_object.py_mod_eq(&right_object, *v) {
+            Some(b) => {
+                left_object.drop_with_heap(heap);
+                right_object.drop_with_heap(heap);
+                Ok(b)
+            }
             None => SimpleException::operand_type_error(left, &Operator::Mod, right, left_object, right_object, heap),
-        },
-        _ => internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented"),
+        };
     }
+
+    let result = match op {
+        CmpOperator::Eq => left_object.py_eq(&right_object, heap),
+        CmpOperator::NotEq => !left_object.py_eq(&right_object, heap),
+        CmpOperator::Gt => left_object.gt(&right_object),
+        CmpOperator::GtE => left_object.ge(&right_object),
+        CmpOperator::Lt => left_object.lt(&right_object),
+        CmpOperator::LtE => left_object.le(&right_object),
+        CmpOperator::Is => left_object.is(heap, &mut right_object),
+        CmpOperator::IsNot => !left_object.is(heap, &mut right_object),
+        CmpOperator::ModEq(_) => unreachable!(), // Handled above
+        _ => {
+            left_object.drop_with_heap(heap);
+            right_object.drop_with_heap(heap);
+            return internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented");
+        }
+    };
+
+    // Drop temporary references to operands
+    left_object.drop_with_heap(heap);
+    right_object.drop_with_heap(heap);
+    Ok(result)
 }
 
 /// Evaluates callable function calls, collecting argument values via the shared heap.

@@ -17,10 +17,10 @@ use crate::values::PyValue;
 /// inline, while heap-allocated objects (List, Str, Dict, etc.) are stored in the arena
 /// and referenced via `Ref(ObjectId)`.
 ///
-/// NOTE: We intentionally keep `Clone` and `PartialEq` derives temporarily during
-/// migration, but these will be removed once all code uses `clone_with_heap()` and
-/// heap-aware comparisons. Direct cloning bypasses reference counting and will cause leaks.
-#[derive(Debug, Clone, PartialEq)]
+/// NOTE: `Clone` is intentionally NOT derived. Use `clone_with_heap()` for heap objects
+/// or `clone_immediate()` for immediate values only. Direct cloning via `.clone()` would
+/// bypass reference counting and cause memory leaks.
+#[derive(Debug, PartialEq)]
 pub enum Object {
     // Immediate values (stored inline, no heap allocation)
     Undefined,
@@ -183,9 +183,13 @@ impl PyValue for Object {
         }
     }
 
-    fn py_getitem(&self, key: &Self, heap: &Heap) -> RunResult<'static, Self> {
+    fn py_getitem(&self, key: &Self, heap: &mut Heap) -> RunResult<'static, Self> {
         match self {
-            Object::Ref(id) => heap.get(*id).py_getitem(key, heap),
+            Object::Ref(id) => {
+                // Need to take entry out to allow mutable heap access
+                let id = *id;
+                heap.with_entry_mut(id, |heap, data| data.py_getitem(key, heap))
+            }
             _ => Err(ExcType::type_error_not_sub(self.py_type(heap))),
         }
     }
@@ -279,8 +283,8 @@ impl Object {
             Self::Ref(id) => *id + 5,
             // Everything else (Int, Float, Range, Exc) needs to be boxed
             _ => {
-                // Clone the current value before replacing it
-                let boxed = Box::new(self.clone());
+                // Use clone_immediate since these are all non-Ref variants
+                let boxed = Box::new(self.clone_immediate());
                 let new_id = heap.allocate(HeapData::Object(boxed));
                 // Replace self with a Ref to the newly allocated heap object
                 *self = Self::Ref(new_id);
@@ -413,6 +417,28 @@ impl Object {
             Self::Range(v) => Self::Range(*v),
             Self::Exc(e) => Self::Exc(e.clone()),
             Self::Ref(_) => unreachable!("Ref clones must go through clone_with_heap to maintain refcounts"),
+        }
+    }
+
+    /// Creates a shallow copy of this Object without incrementing reference counts.
+    ///
+    /// IMPORTANT: For Ref variants, this copies the ObjectId but does NOT increment
+    /// the reference count. The caller MUST call `heap.inc_ref()` separately for any
+    /// Ref variants to maintain correct reference counting.
+    ///
+    /// This is useful when you need to copy Objects from a borrowed heap context
+    /// and will increment refcounts in a separate step.
+    pub(crate) fn copy_for_extend(&self) -> Self {
+        match self {
+            Self::Undefined => Self::Undefined,
+            Self::Ellipsis => Self::Ellipsis,
+            Self::None => Self::None,
+            Self::Bool(b) => Self::Bool(*b),
+            Self::Int(v) => Self::Int(*v),
+            Self::Float(v) => Self::Float(*v),
+            Self::Range(v) => Self::Range(*v),
+            Self::Exc(e) => Self::Exc(e.clone()),
+            Self::Ref(id) => Self::Ref(*id), // Caller must increment refcount!
         }
     }
 

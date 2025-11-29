@@ -25,7 +25,7 @@ use crate::values::PyValue;
 /// When objects are added via `set()`, their reference counts are incremented.
 /// When using `from_pairs()`, ownership is transferred without incrementing refcounts
 /// (caller must ensure objects' refcounts account for the dict's reference).
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Dict {
     /// Maps hash -> list of (key, value) pairs with that hash
     /// The Vec handles hash collisions. IndexMap preserves insertion order.
@@ -104,24 +104,17 @@ impl Dict {
 
     /// Sets a key-value pair in the dict.
     ///
-    /// If the key already exists, replaces the old value and returns it (after
-    /// decrementing its refcount). Otherwise returns None.
-    /// Returns Err if key is unhashable.
+    /// The caller transfers ownership of `key` and `value` to the dict. Their refcounts
+    /// are NOT incremented here - the caller is responsible for ensuring the refcounts
+    /// were already incremented (e.g., via `clone_with_heap` or `evaluate_use`).
     ///
-    /// Reference counting: increments refcounts for new key and value,
-    /// decrements refcounts for old key and value if replacing.
+    /// If the key already exists, replaces the old value and returns it (caller now
+    /// owns the old value and is responsible for its refcount).
+    /// Returns Err if key is unhashable.
     pub fn set(&mut self, key: Object, value: Object, heap: &mut Heap) -> RunResult<'static, Option<Object>> {
         let hash = key
             .py_hash_u64(heap)
             .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(heap)))?;
-
-        // Increment refcounts for new key and value
-        if let Object::Ref(id) = &key {
-            heap.inc_ref(*id);
-        }
-        if let Object::Ref(id) = &value {
-            heap.inc_ref(*id);
-        }
 
         let bucket = self.map.entry(hash).or_default();
 
@@ -131,15 +124,14 @@ impl Dict {
                 // Key exists, replace in place to preserve insertion order within the bucket
                 let (old_key, old_value) = std::mem::replace(&mut bucket[i], (key, value));
 
-                // Decrement refcounts for old key and value
+                // Decrement refcount for old key (we're discarding it)
                 old_key.drop_with_heap(heap);
-                let result = old_value.clone();
-                old_value.drop_with_heap(heap);
-                return Ok(Some(result));
+                // Transfer ownership of old_value to caller (no clone needed)
+                return Ok(Some(old_value));
             }
         }
 
-        // Key doesn't exist, add new pair
+        // Key doesn't exist, add new pair (ownership transfer)
         bucket.push((key, value));
         Ok(None)
     }
@@ -171,43 +163,46 @@ impl Dict {
         Ok(None)
     }
 
-    /// Returns a vector of all keys in the dict.
+    /// Returns a vector of all keys in the dict with proper reference counting.
     ///
-    /// Note: Does not increment refcounts - these are references to keys in the dict.
+    /// Each key's reference count is incremented since the returned vector
+    /// now holds additional references to these objects.
     #[must_use]
-    pub fn keys(&self) -> Vec<Object> {
+    pub fn keys(&self, heap: &mut Heap) -> Vec<Object> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (k, _v) in bucket {
-                result.push(k.clone());
+                result.push(k.clone_with_heap(heap));
             }
         }
         result
     }
 
-    /// Returns a vector of all values in the dict.
+    /// Returns a vector of all values in the dict with proper reference counting.
     ///
-    /// Note: Does not increment refcounts - these are references to values in the dict.
+    /// Each value's reference count is incremented since the returned vector
+    /// now holds additional references to these objects.
     #[must_use]
-    pub fn values(&self) -> Vec<Object> {
+    pub fn values(&self, heap: &mut Heap) -> Vec<Object> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (_k, v) in bucket {
-                result.push(v.clone());
+                result.push(v.clone_with_heap(heap));
             }
         }
         result
     }
 
-    /// Returns a vector of all (key, value) pairs in the dict.
+    /// Returns a vector of all (key, value) pairs in the dict with proper reference counting.
     ///
-    /// Note: Does not increment refcounts - these are references to items in the dict.
+    /// Each key and value's reference count is incremented since the returned vector
+    /// now holds additional references to these objects.
     #[must_use]
-    pub fn items(&self) -> Vec<(Object, Object)> {
+    pub fn items(&self, heap: &mut Heap) -> Vec<(Object, Object)> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (k, v) in bucket {
-                result.push((k.clone(), v.clone()));
+                result.push((k.clone_with_heap(heap), v.clone_with_heap(heap)));
             }
         }
         result
@@ -223,6 +218,24 @@ impl Dict {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Creates a deep clone of this dict with proper reference counting.
+    ///
+    /// All heap-allocated keys and values have their reference counts
+    /// incremented. This should be used instead of `.clone()` which would
+    /// bypass reference counting.
+    #[must_use]
+    pub fn clone_with_heap(&self, heap: &mut Heap) -> Self {
+        let mut new_map = IndexMap::new();
+        for (hash, bucket) in &self.map {
+            let new_bucket: Vec<(Object, Object)> = bucket
+                .iter()
+                .map(|(k, v)| (k.clone_with_heap(heap), v.clone_with_heap(heap)))
+                .collect();
+            new_map.insert(*hash, new_bucket);
+        }
+        Self { map: new_map }
     }
 }
 
@@ -295,16 +308,25 @@ impl PyValue for Dict {
         Cow::Owned(s)
     }
 
-    fn py_getitem(&self, key: &Object, heap: &Heap) -> RunResult<'static, Object> {
-        if let Some(value) = self.get(key, heap)? {
-            Ok(value.clone())
-        } else {
-            Err(ExcType::key_error(key, heap))
+    fn py_getitem(&self, key: &Object, heap: &mut Heap) -> RunResult<'static, Object> {
+        // Use copy_for_extend to avoid borrow conflict, then increment refcount
+        let result = self.get(key, heap)?.map(Object::copy_for_extend);
+        match result {
+            Some(value) => {
+                if let Object::Ref(id) = &value {
+                    heap.inc_ref(*id);
+                }
+                Ok(value)
+            }
+            None => Err(ExcType::key_error(key, heap)),
         }
     }
 
     fn py_setitem(&mut self, key: Object, value: Object, heap: &mut Heap) -> RunResult<'static, ()> {
-        self.set(key, value, heap)?;
+        // Drop the old value if one was replaced
+        if let Some(old_value) = self.set(key, value, heap)? {
+            old_value.drop_with_heap(heap);
+        }
         Ok(())
     }
 
@@ -318,12 +340,19 @@ impl PyValue for Dict {
                     return Err(ExcType::type_error_at_most("get", 2, args.len()));
                 }
                 let key = &args[0];
-                match self.get(key, heap)? {
-                    Some(value) => Ok(value.clone()),
+                // Use copy_for_extend to avoid borrow conflict, then increment refcount
+                let result = self.get(key, heap)?.map(Object::copy_for_extend);
+                match result {
+                    Some(value) => {
+                        if let Object::Ref(id) = &value {
+                            heap.inc_ref(*id);
+                        }
+                        Ok(value)
+                    }
                     None => {
                         // Return default if provided, else None
                         if args.len() == 2 {
-                            Ok(args[1].clone())
+                            Ok(args[1].clone_with_heap(heap))
                         } else {
                             Ok(Object::None)
                         }
@@ -334,13 +363,8 @@ impl PyValue for Dict {
                 if !args.is_empty() {
                     return Err(ExcType::type_error_no_args("dict.keys", args.len()));
                 }
-                let keys = self.keys();
-                // Increment refcounts for all keys in the list
-                for key in &keys {
-                    if let Object::Ref(id) = key {
-                        heap.inc_ref(*id);
-                    }
-                }
+                // keys() now handles refcount incrementing
+                let keys = self.keys(heap);
                 let list_id = heap.allocate(HeapData::List(crate::values::List::from_vec(keys)));
                 Ok(Object::Ref(list_id))
             }
@@ -348,13 +372,8 @@ impl PyValue for Dict {
                 if !args.is_empty() {
                     return Err(ExcType::type_error_no_args("dict.values", args.len()));
                 }
-                let values = self.values();
-                // Increment refcounts for all values in the list
-                for value in &values {
-                    if let Object::Ref(id) = value {
-                        heap.inc_ref(*id);
-                    }
-                }
+                // values() now handles refcount incrementing
+                let values = self.values(heap);
                 let list_id = heap.allocate(HeapData::List(crate::values::List::from_vec(values)));
                 Ok(Object::Ref(list_id))
             }
@@ -362,16 +381,11 @@ impl PyValue for Dict {
                 if !args.is_empty() {
                     return Err(ExcType::type_error_no_args("dict.items", args.len()));
                 }
-                let items = self.items();
+                // items() now handles refcount incrementing for the returned objects
+                let items = self.items(heap);
                 // Convert to list of tuples
                 let mut tuples = Vec::new();
                 for (k, v) in items {
-                    if let Object::Ref(id) = &k {
-                        heap.inc_ref(*id);
-                    }
-                    if let Object::Ref(id) = &v {
-                        heap.inc_ref(*id);
-                    }
                     let tuple_id = heap.allocate(HeapData::Tuple(crate::values::Tuple::from_vec(vec![k, v])));
                     tuples.push(Object::Ref(tuple_id));
                 }
@@ -395,7 +409,7 @@ impl PyValue for Dict {
                     None => {
                         // Return default if provided, else KeyError
                         if args.len() == 2 {
-                            Ok(args[1].clone())
+                            Ok(args[1].clone_with_heap(heap))
                         } else {
                             Err(ExcType::key_error(key, heap))
                         }

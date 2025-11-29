@@ -29,8 +29,12 @@ lint-py: ## Lint Python code with ruff
 lint: lint-rs lint-py ## Lint the code with ruff and clippy
 
 .PHONY: test
-test:
+test: ## Run tests
 	cargo test
+
+.PHONY: test-ref-counting
+test-ref-counting: ## Run tests with ref-counting enabled
+	cargo test --features ref-counting
 
 .PHONY: complete-tests
 complete-tests: ## Fill in incomplete test expectations using CPython

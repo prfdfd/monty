@@ -82,12 +82,23 @@ You should prefer single quotes for strings in python tests.
 - `# Return.type=typename` - Check `type()` output
 - `# Raise=Exception('message')` - Expect exception
 - `# ParseError=message` - Expect parse error
+- `# ref-counts={...}` - To check reference counts of heap-allocated objects
 
 Run `make lint-py` after adding tests to format them.
 
 Use make `make complete-tests` after adding tests with the expectations blank e.g. `# Return=` to fill in the expected value.
 
 These tests are run via `datatest-stable` harness in `tests/datatest_runner.rs`.
+
+## Reference Counting
+
+Heap-allocated objects (`Object::Ref`) use manual reference counting. Key rules:
+
+- **Cloning**: Never use `.clone()` on `Object`. Use `clone_with_heap(heap)` which increments refcounts for `Ref` variants.
+- **Dropping**: Call `drop_with_heap(heap)` when discarding an `Object` that may be a `Ref`.
+- **Borrow conflicts**: When you need to read from the heap and then mutate it, use `copy_for_extend()` to copy the `Object` without incrementing refcount, then call `heap.inc_ref()` separately after the borrow ends.
+
+Container types (`List`, `Tuple`, `Dict`) also have `clone_with_heap()` methods.
 
 ## NOTES
 
