@@ -22,6 +22,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - uses: astral-sh/setup-uv@v7
+
       - uses: pre-commit/action@v3.0.0
         with:
           extra_args: --all-files --verbose

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::exceptions::{check_arg_count, exc_err_fmt, ExcType};
+use crate::exceptions::{check_arg_count, ExcType};
 use crate::heap::{Heap, HeapData, ObjectId};
 use crate::object::{Attr, Object};
 use crate::run::RunResult;
@@ -176,16 +176,12 @@ impl PyValue for List {
                 Ok(self.append(heap, item))
             }
             Attr::Insert => {
-                let [index_obj, item] = check_arg_count::<2>("list.insert", args)?;
+                let [index_obj, item] = check_arg_count::<2>("insert", args)?;
                 let index = index_obj.as_int()? as usize;
                 Ok(self.insert(heap, index, item))
             }
             Attr::Get | Attr::Keys | Attr::Values | Attr::Items | Attr::Pop | Attr::Other(_) => {
-                exc_err_fmt!(
-                    ExcType::AttributeError;
-                    "'list' object has no attribute '{}'",
-                    attr
-                )
+                Err(ExcType::attribute_error("list", attr))
             }
         }
     }

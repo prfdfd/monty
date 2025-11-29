@@ -19,10 +19,16 @@ repos:
 
   - repo: local
     hooks:
-      - id: lint
-        name: Lint
-        entry: make lint
+      - id: lint-rs
+        name: Lint Rust
+        entry: make lint-rs
         types: [rust]
+        language: system
+        pass_filenames: false
+      - id: lint-py
+        name: Lint Python
+        entry: make lint-py
+        types: [python]
         language: system
         pass_filenames: false
       - id: test

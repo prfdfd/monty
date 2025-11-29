@@ -13,12 +13,20 @@ install: .cargo .pre-commit ## Install the package, dependencies, and pre-commit
 	cargo check
 	pre-commit install --install-hooks
 
-.PHONY: lint
-lint:
+.PHONY: lint-rs
+lint-rs:  ## Lint Rust code with fmt and clippy
 	@cargo fmt --version
 	cargo fmt --all -- --check
 	@cargo clippy --version
 	cargo clippy --tests -- -D warnings -A incomplete_features -W clippy::dbg_macro
+
+.PHONY: lint-py
+lint-py: ## Lint Python code with ruff
+	uv run ruff format
+	uv run ruff check --fix --fix-only
+
+.PHONY: lint
+lint: lint-rs lint-py ## Lint the code with ruff and clippy
 
 .PHONY: test
 test:

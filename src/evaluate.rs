@@ -194,7 +194,7 @@ fn cmp_op<'c, 'd>(
         CmpOperator::IsNot => Ok(!left_object.is(heap, &mut right_object)),
         CmpOperator::ModEq(v) => match left_object.py_mod_eq(&right_object, *v) {
             Some(b) => Ok(b),
-            None => SimpleException::operand_type_error(left, Operator::Mod, right, left_object, right_object, heap),
+            None => SimpleException::operand_type_error(left, &Operator::Mod, right, left_object, right_object, heap),
         },
         _ => internal_err!(InternalRunError::TodoError; "Operator {op:?} not yet implemented"),
     }

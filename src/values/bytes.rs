@@ -3,12 +3,51 @@
 /// This type provides Python bytes semantics. Currently supports basic
 /// operations like length and equality comparison.
 use std::borrow::Cow;
+use std::fmt::Write;
 
 use crate::exceptions::ExcType;
 use crate::heap::{Heap, ObjectId};
 use crate::object::{Attr, Object};
 use crate::run::RunResult;
 use crate::values::PyValue;
+
+/// Returns a CPython-compatible repr string for bytes.
+///
+/// Format: `b'...'` or `b"..."` depending on content.
+/// - Uses single quotes by default
+/// - Switches to double quotes if bytes contain `'` but not `"`
+/// - Escapes: `\\`, `\t`, `\n`, `\r`, `\xNN` for non-printable bytes
+#[must_use]
+pub fn bytes_repr(bytes: &[u8]) -> String {
+    // Determine quote character: use double quotes if single quote present but not double
+    let has_single = bytes.contains(&b'\'');
+    let has_double = bytes.contains(&b'"');
+    let quote = if has_single && !has_double { '"' } else { '\'' };
+
+    let mut result = String::with_capacity(bytes.len() + 3);
+    result.push('b');
+    result.push(quote);
+
+    for &byte in bytes {
+        match byte {
+            b'\\' => result.push_str("\\\\"),
+            b'\t' => result.push_str("\\t"),
+            b'\n' => result.push_str("\\n"),
+            b'\r' => result.push_str("\\r"),
+            b'\'' if quote == '\'' => result.push_str("\\'"),
+            b'"' if quote == '"' => result.push_str("\\\""),
+            // Printable ASCII (32-126)
+            0x20..=0x7e => result.push(byte as char),
+            // Non-printable: use \xNN format
+            _ => {
+                let _ = write!(result, "\\x{byte:02x}");
+            }
+        }
+    }
+
+    result.push(quote);
+    result
+}
 
 /// Python bytes value stored on the heap.
 ///
@@ -84,7 +123,7 @@ impl PyValue for Bytes {
     }
 
     fn py_repr<'h>(&'h self, _heap: &'h Heap) -> Cow<'h, str> {
-        Cow::Owned(format!("b'{:?}'", self.0.as_slice()))
+        Cow::Owned(bytes_repr(&self.0))
     }
 
     fn py_call_attr<'c>(&mut self, heap: &mut Heap, attr: &Attr, _args: Vec<Object>) -> RunResult<'c, Object> {

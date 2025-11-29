@@ -1,2 +1,2 @@
-'hello'
+"hello"
 # Return.type=str

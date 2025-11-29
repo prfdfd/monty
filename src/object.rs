@@ -418,12 +418,19 @@ impl Object {
     fn cow_str(&self) -> Cow<'static, str> {
         match self {
             Self::Undefined => "Undefined".into(),
-            Self::Ellipsis => "...".into(),
+            Self::Ellipsis => "Ellipsis".into(),
             Self::None => "None".into(),
             Self::Bool(true) => "True".into(),
             Self::Bool(false) => "False".into(),
             Self::Int(v) => format!("{v}").into(),
-            Self::Float(v) => format!("{v}").into(),
+            Self::Float(v) => {
+                let s = v.to_string();
+                if s.contains('.') {
+                    s.into()
+                } else {
+                    format!("{s}.0").into()
+                }
+            }
             Self::Range(size) => format!("0:{size}").into(),
             Self::Exc(exc) => format!("{exc}").into(),
             Self::Ref(id) => format!("<Ref({id})>").into(),

@@ -7,6 +7,7 @@ use std::str::FromStr;
 use crate::expressions::ExprLoc;
 use crate::heap::HeapData;
 use crate::object::{Attr, Object};
+use crate::operators::Operator;
 use crate::parse::CodeRange;
 use crate::run::RunResult;
 use crate::values::str::string_repr;
@@ -146,11 +147,6 @@ impl ExcType {
 ///
 /// Uses const generics so the compiler knows the exact array size at compile time,
 /// enabling safe pattern matching without runtime indexing or `.unwrap()`.
-///
-/// # Example
-/// ```ignore
-/// let [a, b] = check_arg_count::<2>("list.insert", args)?;
-/// ```
 pub fn check_arg_count<'c, const N: usize>(name: &str, args: Vec<Object>) -> Result<[Object; N], RunError<'c>> {
     let actual = args.len();
     if actual == N {
@@ -241,10 +237,16 @@ impl SimpleException {
         }
     }
 
-    /// TODO move to `ExcType`
+    /// Creates a TypeError for binary operator type mismatches.
+    ///
+    /// For `+` with str/list on the left side, uses CPython's special format:
+    /// `can only concatenate {type} (not "{other}") to {type}`
+    ///
+    /// For other cases, uses the generic format:
+    /// `unsupported operand type(s) for {op}: '{left}' and '{right}'`
     pub(crate) fn operand_type_error<'c, 'd, T>(
         left: &'d ExprLoc<'c>,
-        op: impl fmt::Display,
+        op: &Operator,
         right: &'d ExprLoc<'c>,
         left_object: Object,
         right_object: Object,
@@ -253,11 +255,17 @@ impl SimpleException {
         let left_type = left_object.py_type(heap);
         let right_type = right_object.py_type(heap);
         let new_position = left.position.extend(&right.position);
-        Err(
-            exc_fmt!(ExcType::TypeError; "unsupported operand type(s) for {op}: '{left_type}' and '{right_type}'")
-                .with_position(new_position)
-                .into(),
-        )
+
+        // CPython uses a special message for str/list + operations
+        let message = if *op == Operator::Add && (left_type == "str" || left_type == "list") {
+            format!("can only concatenate {left_type} (not \"{right_type}\") to {left_type}")
+        } else {
+            format!("unsupported operand type(s) for {op}: '{left_type}' and '{right_type}'")
+        };
+
+        Err(SimpleException::new(ExcType::TypeError, Some(message.into()))
+            .with_position(new_position)
+            .into())
     }
 }
 

@@ -1,2 +1,2 @@
 'hello' + 1
-# Raise=TypeError("unsupported operand type(s) for +: 'str' and 'int'")
+# Raise=TypeError('can only concatenate str (not "int") to str')

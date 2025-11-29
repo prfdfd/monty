@@ -1,2 +1,2 @@
 [1] + 'x'
-# Raise=TypeError("unsupported operand type(s) for +: 'list' and 'str'")
+# Raise=TypeError('can only concatenate list (not "str") to list')

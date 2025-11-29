@@ -1,11 +1,31 @@
 use monty::{Executor, Exit};
+use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
 
+/// Specifies which interpreters a test should run on.
+///
+/// Parsed from an optional `# test=monty,cpython` comment at the start of a test file.
+/// If not present, defaults to running on both interpreters.
+#[derive(Debug, Clone)]
+struct TestTargets {
+    monty: bool,
+    cpython: bool,
+}
+
+impl Default for TestTargets {
+    fn default() -> Self {
+        Self {
+            monty: true,
+            cpython: true,
+        }
+    }
+}
+
 /// Represents the expected outcome of a test fixture
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Expectation {
     /// Expect exception with specific message
     Raise(String),
@@ -22,7 +42,24 @@ enum Expectation {
     RefCounts(#[cfg_attr(not(feature = "ref-counting"), allow(dead_code))] HashMap<String, usize>),
 }
 
-/// Parse a Python fixture file into code and expected outcome
+impl Expectation {
+    /// Returns the expected value string
+    fn expected_value(&self) -> &str {
+        match self {
+            Expectation::Raise(s)
+            | Expectation::ParseError(s)
+            | Expectation::ReturnStr(s)
+            | Expectation::Return(s)
+            | Expectation::ReturnType(s) => s,
+            Expectation::RefCounts(_) => "",
+        }
+    }
+}
+
+/// Parse a Python fixture file into code, expected outcome, and test targets.
+///
+/// The file may optionally start with a `# test=monty,cpython` comment to specify
+/// which interpreters to run on. If not present, defaults to both.
 ///
 /// The file MUST have an expectation comment as the LAST line:
 /// - `# Raise=ExceptionType('message')` - Exception format
@@ -31,16 +68,31 @@ enum Expectation {
 /// - `# Return=value` - Check py_repr() output
 /// - `# Return.type=typename` - Check py_type() output
 /// - `# ref-counts={'var': count, ...}` - Check ref counts of named heap variables
-fn parse_fixture(content: &str) -> (String, Expectation) {
+fn parse_fixture(content: &str) -> (String, Expectation, TestTargets) {
     let lines: Vec<&str> = content.lines().collect();
 
     assert!(!lines.is_empty(), "Empty fixture file");
 
-    // Check if first line has an expectation (this is an error)
-    if let Some(first_line) = lines.first() {
-        if first_line.starts_with("# Return")
-            || first_line.starts_with("# Raise")
-            || first_line.starts_with("# ParseError")
+    // Check for test targets comment at the start of the file
+    let (targets, code_start_idx) = if let Some(first_line) = lines.first() {
+        if let Some(targets_str) = first_line.strip_prefix("# test=") {
+            let targets = TestTargets {
+                monty: targets_str.contains("monty"),
+                cpython: targets_str.contains("cpython"),
+            };
+            (targets, 1)
+        } else {
+            (TestTargets::default(), 0)
+        }
+    } else {
+        (TestTargets::default(), 0)
+    };
+
+    // Check if first code line has an expectation (this is an error)
+    if let Some(first_code_line) = lines.get(code_start_idx) {
+        if first_code_line.starts_with("# Return")
+            || first_code_line.starts_with("# Raise")
+            || first_code_line.starts_with("# ParseError")
         {
             panic!("Expectation comment must be on the LAST line, not the first line");
         }
@@ -49,7 +101,7 @@ fn parse_fixture(content: &str) -> (String, Expectation) {
     // Get the last line (must be the expectation)
     let last_line = lines.last().unwrap();
     let expectation_line = last_line;
-    let code_lines = &lines[..lines.len() - 1];
+    let code_lines = &lines[code_start_idx..lines.len() - 1];
 
     // Parse expectation from comment line
     // Note: Check more specific patterns first (Return.str, Return.type, ref-counts) before general Return
@@ -69,10 +121,10 @@ fn parse_fixture(content: &str) -> (String, Expectation) {
         panic!("Invalid expectation format in comment line: {expectation_line}");
     };
 
-    // Code is everything except the expectation comment line
+    // Code is everything except the test targets comment and expectation comment
     let code = code_lines.join("\n");
 
-    (code, expectation)
+    (code, expectation, targets)
 }
 
 /// Parses the ref-counts format: {'var': count, 'var2': count2}
@@ -174,15 +226,151 @@ fn run_test(path: &Path, code: &str, expectation: Expectation) {
     }
 }
 
-/// Test function that runs for each Python fixture file
-fn run_fixture_test(path: &Path) -> Result<(), Box<dyn Error>> {
-    let content = fs::read_to_string(path)?;
+/// Wrap Python code in a function that returns the last expression's value.
+///
+/// The last non-empty line is treated as an expression whose value should be returned.
+/// All other lines are executed as statements.
+///
+/// If `add_return` is false, all lines are wrapped as-is (for code that raises exceptions).
+fn wrap_code_in_function(code: &str, add_return: bool) -> String {
+    let lines: Vec<&str> = code.lines().collect();
 
-    let (code, expectation) = parse_fixture(&content);
-    run_test(path, &code, expectation);
+    // Find the last non-empty line
+    let last_idx = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .expect("Empty code");
+
+    let mut result = String::from("def __test__():\n");
+
+    if add_return {
+        // Add all lines except the last, indented
+        for line in &lines[..last_idx] {
+            if line.trim().is_empty() {
+                result.push('\n');
+            } else {
+                result.push_str("    ");
+                result.push_str(line);
+                result.push('\n');
+            }
+        }
+
+        // Add the last line as a return statement
+        result.push_str("    return ");
+        result.push_str(lines[last_idx]);
+        result.push('\n');
+    } else {
+        // Add all lines as-is (for exception tests)
+        for line in &lines[..=last_idx] {
+            if line.trim().is_empty() {
+                result.push('\n');
+            } else {
+                result.push_str("    ");
+                result.push_str(line);
+                result.push('\n');
+            }
+        }
+    }
+
+    result
+}
+
+/// Run a test through CPython to verify Monty produces the same output
+///
+/// This function executes the same Python code via CPython (using pyo3) and
+/// compares the result with the expected value. This ensures Monty behaves
+/// identically to CPython.
+///
+/// ParseError tests are skipped since Monty uses a different parser (ruff).
+fn run_cpython_test(path: &Path, code: &str, expectation: &Expectation) {
+    // Skip ParseError tests - Monty uses ruff parser which has different error messages
+    if matches!(expectation, Expectation::ParseError(_) | Expectation::RefCounts(_)) {
+        return;
+    }
+
+    let test_name = path.strip_prefix("test_cases/").unwrap_or(path).display().to_string();
+    let add_return = !matches!(expectation, Expectation::Raise(_));
+    let wrapped = wrap_code_in_function(code, add_return);
+
+    let result = Python::with_gil(|py| {
+        // Execute the wrapped code to define __test__
+        let globals = pyo3::types::PyDict::new(py);
+        py.run(&wrapped, Some(globals), None)
+            .unwrap_or_else(|e| panic!("[{test_name}] CPython failed to define __test__: {e}"));
+
+        // Get and call the __test__ function
+        let test_fn = globals.get_item("__test__").expect("__test__ not defined");
+
+        match test_fn.call0() {
+            Ok(result) => {
+                // Code returned successfully - format based on expectation type
+                match expectation {
+                    Expectation::Return(_) => result.repr().unwrap().to_string(),
+                    Expectation::ReturnStr(_) => result.str().unwrap().to_string(),
+                    Expectation::ReturnType(_) => result.get_type().name().unwrap().to_string(),
+                    Expectation::Raise(_) => {
+                        panic!("[{test_name}] Expected exception but code completed normally")
+                    }
+                    Expectation::ParseError(_) => unreachable!(),
+                    Expectation::RefCounts(_) => unreachable!(),
+                }
+            }
+            Err(e) => {
+                // Code raised an exception
+                let exc_type = e.get_type(py).name().unwrap();
+                let exc_message: String = e
+                    .value(py)
+                    .getattr("args")
+                    .and_then(|args| args.get_item(0))
+                    .and_then(pyo3::PyAny::extract)
+                    .unwrap_or_default();
+
+                if exc_message.is_empty() {
+                    format!("{exc_type}()")
+                } else if exc_message.contains('\'') {
+                    // Use double quotes when message contains single quotes (like Python's repr)
+                    format!("{exc_type}(\"{exc_message}\")")
+                } else {
+                    // Use single quotes (default Python repr format)
+                    format!("{exc_type}('{exc_message}')")
+                }
+            }
+        }
+    });
+
+    assert_eq!(
+        result,
+        expectation.expected_value(),
+        "[{test_name}] CPython result mismatch"
+    );
+}
+
+/// Test function that runs each fixture through Monty
+fn run_test_cases_monty(path: &Path) -> Result<(), Box<dyn Error>> {
+    let content = fs::read_to_string(path)?;
+    let (code, expectation, targets) = parse_fixture(&content);
+    if targets.monty {
+        run_test(path, &code, expectation);
+    }
+    Ok(())
+}
+
+/// Test function that runs each fixture through CPython
+fn run_test_cases_cpython(path: &Path) -> Result<(), Box<dyn Error>> {
+    let content = fs::read_to_string(path)?;
+    let (code, expectation, targets) = parse_fixture(&content);
+    if targets.cpython {
+        run_cpython_test(path, &code, &expectation);
+    }
     Ok(())
 }
 
 // Generate tests for all fixture files using datatest-stable harness macro
-// All fixtures are now in a flat structure with group prefixes (e.g., id__is_test.py)
-datatest_stable::harness!(run_fixture_test, "test_cases", r"^.*\.py$");
+datatest_stable::harness!(
+    run_test_cases_monty,
+    "test_cases",
+    r"^.*\.py$",
+    run_test_cases_cpython,
+    "test_cases",
+    r"^.*\.py$",
+);
