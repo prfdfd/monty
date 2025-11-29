@@ -21,6 +21,12 @@ enum_dispatch = "0.3.13"
 #strum = { version = "0.25", features = ["derive"] }
 #strum_macros = "0.25"
 
+[features]
+## Enables ref-count testing support. When enabled, the Executor stores
+## name_map and last_namespace to allow inspection of reference counts after execution.
+## Disabled by default to avoid memory overhead in production.
+ref-counting = []
+
 [dev-dependencies]
 paste = "1.0.7"
 pyo3 = { version = "0.19.0", features = ["auto-initialize"] }

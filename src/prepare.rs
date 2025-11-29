@@ -7,14 +7,37 @@ use crate::expressions::{Const, Expr, ExprLoc, Identifier, Kwarg, Node};
 use crate::operators::{CmpOperator, Operator};
 use crate::parse_error::{ParseError, ParseResult};
 
+/// Result of the prepare phase, containing everything needed to execute code.
+///
+/// This struct holds the outputs of name resolution and AST transformation:
+/// - The initial namespace with placeholder values for each variable
+/// - A mapping from variable names to their namespace indices (for ref-count testing)
+/// - The transformed AST nodes ready for execution
+pub(crate) struct PrepareResult<'c> {
+    /// Initial namespace as compile-time constants. Each variable gets a slot,
+    /// initialized to `Const::Undefined` until assigned at runtime.
+    pub namespace: Vec<Const>,
+    /// Maps variable names to their indices in the namespace.
+    /// Used for ref-count testing to look up variables by name.
+    /// Only available when the `ref-counting` feature is enabled.
+    #[cfg(feature = "ref-counting")]
+    pub name_map: AHashMap<String, usize>,
+    /// The prepared AST nodes with all names resolved to namespace indices.
+    pub nodes: Vec<Node<'c>>,
+}
+
 /// Prepares parsed nodes for execution by resolving names and building the initial namespace.
 ///
-/// Returns the initial namespace as Literals (not runtime Objects) along with the prepared nodes.
 /// The namespace will be converted to runtime Objects when execution begins and the heap is available.
-pub(crate) fn prepare<'c>(nodes: Vec<Node<'c>>, input_names: &[&str]) -> ParseResult<'c, (Vec<Const>, Vec<Node<'c>>)> {
+pub(crate) fn prepare<'c>(nodes: Vec<Node<'c>>, input_names: &[&str]) -> ParseResult<'c, PrepareResult<'c>> {
     let mut p = Prepare::new(nodes.len(), input_names, true);
-    let new_nodes = p.prepare_nodes(nodes)?;
-    Ok((p.namespace, new_nodes))
+    let prepared_nodes = p.prepare_nodes(nodes)?;
+    Ok(PrepareResult {
+        namespace: p.namespace,
+        #[cfg(feature = "ref-counting")]
+        name_map: p.name_map,
+        nodes: prepared_nodes,
+    })
 }
 
 /// State machine for the preparation phase that transforms parsed AST nodes into an executable form.

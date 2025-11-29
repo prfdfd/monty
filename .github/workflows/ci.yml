@@ -36,7 +36,11 @@ jobs:
 
       - run: rustc --version --verbose
 
-      - run: cargo test
+      - name: Test without ref-counting feature
+        run: cargo test
+
+      - name: Test with ref-counting feature
+        run: cargo test --features ref-counting
 
   bench:
     runs-on: ubuntu-latest

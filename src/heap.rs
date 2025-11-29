@@ -435,6 +435,31 @@ impl Heap {
     pub fn clear(&mut self) {
         self.objects.clear();
     }
+
+    /// Returns the reference count for the heap object at the given ID.
+    ///
+    /// This is primarily used for testing reference counting behavior.
+    ///
+    /// # Panics
+    /// Panics if the object ID is invalid or the object has already been freed.
+    #[must_use]
+    pub fn get_refcount(&self, id: ObjectId) -> usize {
+        self.objects
+            .get(id)
+            .expect("Heap::get_refcount: slot missing")
+            .as_ref()
+            .expect("Heap::get_refcount: object already freed")
+            .refcount
+    }
+
+    /// Returns the number of live (non-freed) objects on the heap.
+    ///
+    /// This is primarily used for testing to verify that all heap objects
+    /// are accounted for in reference count tests.
+    #[must_use]
+    pub fn object_count(&self) -> usize {
+        self.objects.iter().filter(|o| o.is_some()).count()
+    }
 }
 
 /// Pushes any child object IDs referenced by `data` onto the provided stack so

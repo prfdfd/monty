@@ -27,6 +27,14 @@ impl<'c> RunFrame<'c> {
         }
     }
 
+    /// Consumes the frame and returns the namespace for inspection (e.g., ref-count testing).
+    ///
+    /// Only available when the `ref-counting` feature is enabled.
+    #[cfg(feature = "ref-counting")]
+    pub fn into_namespace(self) -> Vec<Object> {
+        self.namespace
+    }
+
     pub fn execute(&mut self, heap: &mut Heap, nodes: &[Node<'c>]) -> RunResult<'c, FrameExit<'c>> {
         for node in nodes {
             if let Some(leave) = self.execute_node(heap, node)? {
