@@ -74,6 +74,10 @@ impl<'c> Executor<'c> {
         let mut frame = RunFrame::new(namespace);
         let result = frame.execute(&mut heap, &self.nodes);
 
+        // Clean up the frame's namespace before moving the heap into Exit
+        #[cfg(feature = "dec-ref-check")]
+        frame.drop_with_heap(&mut heap);
+
         match result {
             Ok(v) => Ok(Exit::new(v, heap)),
             Err(e) => match e {
@@ -97,10 +101,7 @@ impl<'c> Executor<'c> {
     ///
     /// Only available when the `ref-counting` feature is enabled.
     #[cfg(feature = "ref-counting")]
-    pub fn run_ref_counts<'e>(
-        &'e self,
-        inputs: Vec<Object<'c, 'e>>,
-    ) -> Result<(Exit<'c, 'e>, (HashMap<String, usize>, usize, usize)), InternalRunError> {
+    pub fn run_ref_counts<'e>(&'e self, inputs: Vec<Object<'c, 'e>>) -> RunRefCountsResult<'c, 'e> {
         use std::collections::HashSet;
 
         let namespace = self.prepare_namespace(inputs)?;
@@ -120,7 +121,12 @@ impl<'c> Executor<'c> {
                 unique_ids.insert(*id);
             }
         }
-        let ref_count_data = (counts, unique_ids.len(), heap.object_count());
+        let ref_count_data: RefCountSnapshot = (counts, unique_ids.len(), heap.object_count());
+
+        // Clean up the namespace after reading ref counts but before moving the heap
+        for obj in final_namespace {
+            obj.drop_with_heap(&mut heap);
+        }
 
         let exit = match result {
             Ok(v) => Exit::new(v, heap),
@@ -157,3 +163,11 @@ pub fn parse_show(code: &str, filename: &str) -> Result<String, String> {
         Err(e) => Err(e.to_string()),
     }
 }
+
+#[cfg(feature = "ref-counting")]
+/// Aggregated reference counting statistics returned by `Executor::run_ref_counts`.
+type RefCountSnapshot = (HashMap<String, usize>, usize, usize);
+
+#[cfg(feature = "ref-counting")]
+/// Result type used by `Executor::run_ref_counts`.
+type RunRefCountsResult<'c, 'e> = Result<(Exit<'c, 'e>, RefCountSnapshot), InternalRunError>;

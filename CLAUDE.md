@@ -105,3 +105,5 @@ Container types (`List`, `Tuple`, `Dict`) also have `clone_with_heap()` methods.
 ALWAYS run `make lint` after making changes and fix all suggestions to maintain code quality.
 
 ALWAYS update this file when it is out of date.
+
+NEVER write `unsafe` code, if you think you need to write unsafe code, explicitly ask the user or leave a `todo!()` with a suggestion and explanation.

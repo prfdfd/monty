@@ -27,6 +27,10 @@ smallvec = "1.11"
 ## name_map and last_namespace to allow inspection of reference counts after execution.
 ## Disabled by default to avoid memory overhead in production.
 ref-counting = []
+## Enables dec-ref-check validation. When enabled, Object has a Dereferenced variant
+## and a Drop impl that panics if a Ref variant is dropped without calling drop_with_heap().
+## This helps catch reference counting bugs during development/testing.
+dec-ref-check = []
 
 [dev-dependencies]
 paste = "1.0.7"
@@ -55,7 +59,7 @@ strip = false
 lto = false
 
 [lints.clippy]
-# dbg_macro = "warn"
+dbg_macro = "warn"
 # print_stdout = "warn"
 
 # in general we lint against the pedantic group, but we will whitelist

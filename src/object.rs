@@ -48,6 +48,25 @@ pub enum Object<'c, 'e> {
 
     // Heap-allocated values (stored in arena)
     Ref(ObjectId),
+
+    /// Sentinel value indicating this Object was properly cleaned up via `drop_with_heap`.
+    /// Only exists when `dec-ref-check` feature is enabled. Used to verify reference counting
+    /// correctness - if a `Ref` variant is dropped without calling `drop_with_heap`, the
+    /// Drop impl will panic.
+    #[cfg(feature = "dec-ref-check")]
+    Dereferenced,
+}
+
+/// Drop implementation that panics if a `Ref` variant is dropped without calling `drop_with_heap`.
+/// This helps catch reference counting bugs during development/testing.
+/// Only enabled when the `dec-ref-check` feature is active.
+#[cfg(feature = "dec-ref-check")]
+impl Drop for Object<'_, '_> {
+    fn drop(&mut self) {
+        if let Object::Ref(id) = self {
+            panic!("Object::Ref({id}) dropped without calling drop_with_heap() - this is a reference counting bug");
+        }
+    }
 }
 
 impl From<bool> for Object<'_, '_> {
@@ -72,6 +91,8 @@ impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
             Self::Callable(c) => c.py_type(heap),
             Self::Function(_) => "function",
             Self::Ref(id) => heap.get(*id).py_type(heap),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
     }
 
@@ -157,9 +178,12 @@ impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
         }
     }
 
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>) {
         if let Object::Ref(id) = self {
             stack.push(*id);
+            // Mark as Dereferenced to prevent Drop panic
+            #[cfg(feature = "dec-ref-check")]
+            self.dec_ref_forget();
         }
     }
 
@@ -178,6 +202,8 @@ impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
             Self::InternString(s) => !s.is_empty(),
             Self::InternBytes(b) => !b.is_empty(),
             Self::Ref(id) => heap.get(*id).py_bool(heap),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
     }
 
@@ -204,6 +230,8 @@ impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
             Self::InternString(s) => string_repr(s).into(),
             Self::InternBytes(b) => bytes_repr(b).into(),
             Self::Ref(id) => heap.get(*id).py_repr(heap),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
     }
 
@@ -385,21 +413,21 @@ impl<'c, 'e> PyValue<'c, 'e> for Object<'c, 'e> {
 }
 
 impl<'c, 'e> Object<'c, 'e> {
-    /// Returns a stable, unique identifier for this object, boxing it to the heap if necessary.
+    /// Returns a stable, unique identifier for this object.
     ///
-    /// Should match Python's `id()` function.
+    /// Should match Python's `id()` function conceptually.
     ///
-    /// For inline values (Int, Float, Range), this method allocates them to the heap on first call
-    /// and replaces `self` with an `Object::Ref` pointing to the boxed value. This ensures that
-    /// subsequent calls to `id()` return the same stable heap address.
+    /// For immediate values (Int, Float, Range, Exc, Callable), this computes a deterministic ID
+    /// based on the value's hash, avoiding heap allocation. This means `id(5) == id(5)` will
+    /// return True (unlike CPython for large integers outside the interning range).
     ///
-    /// Singletons (None, True, False, etc.) return IDs from a dedicated tagged range without allocation.
-    /// Already heap-allocated objects (Ref) reuse their `ObjectId` inside the heap-tagged range.
-    pub fn id(&mut self, heap: &mut Heap<'c, 'e>) -> usize {
+    /// Singletons (None, True, False, etc.) return IDs from a dedicated tagged range.
+    /// Interned strings/bytes use their pointer + length for stable identity.
+    /// Heap-allocated objects (Ref) reuse their `ObjectId` inside the heap-tagged range.
+    pub fn id(&self) -> usize {
         match self {
-            // should not be used in practice
-            Self::Undefined => singleton_id(SingletonSlot::Undefined),
             // Singletons have fixed tagged IDs
+            Self::Undefined => singleton_id(SingletonSlot::Undefined),
             Self::Ellipsis => singleton_id(SingletonSlot::Ellipsis),
             Self::None => singleton_id(SingletonSlot::None),
             Self::Bool(b) => {
@@ -418,20 +446,22 @@ impl<'c, 'e> Object<'c, 'e> {
             }
             // Already heap-allocated, return id within a dedicated tag range
             Self::Ref(id) => heap_tagged_id(*id),
-            // Everything else needs to be added to the heap to get a stable address
-            _ => {
-                // Use clone_immediate since these are all non-Ref variants
-                let new_id = heap.allocate(HeapData::Object(self.clone_immediate()));
-                // Replace self with a Ref to the newly allocated heap object
-                *self = Self::Ref(new_id);
-                heap_tagged_id(new_id)
-            }
+            // Value-based IDs for immediate types (no heap allocation!)
+            Self::Int(v) => int_value_id(*v),
+            Self::Float(v) => float_value_id(*v),
+            Self::Range(v) => range_value_id(*v),
+            Self::Exc(e) => exc_value_id(e),
+            Self::Callable(c) => callable_value_id(c),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot get id of Dereferenced object"),
         }
     }
 
-    /// Equivalent of Python's `is` method.
-    pub fn is(&mut self, heap: &mut Heap<'c, 'e>, other: &mut Self) -> bool {
-        self.id(heap) == other.id(heap)
+    /// Equivalent of Python's `is` operator.
+    ///
+    /// Compares object identity by comparing their IDs.
+    pub fn is(&self, other: &Self) -> bool {
+        self.id() == other.id()
     }
 
     /// Computes the hash value for this object, used for dict keys.
@@ -497,6 +527,8 @@ impl<'c, 'e> Object<'c, 'e> {
             }
             // For heap-allocated objects, compute hash lazily and cache it
             Self::Ref(id) => heap.get_or_compute_hash(*id),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
     }
 
@@ -557,7 +589,21 @@ impl<'c, 'e> Object<'c, 'e> {
     /// # Important
     /// This method MUST be called before overwriting a namespace slot or discarding
     /// a value to prevent memory leaks.
-    pub fn drop_with_heap(self, heap: &mut Heap<'c, 'e>) {
+    ///
+    /// With `dec-ref-check` enabled, `Ref` variants are replaced with `Dereferenced` and
+    /// the original is forgotten to prevent the Drop impl from panicking. Non-Ref variants
+    /// are left unchanged since they don't trigger the Drop panic.
+    #[allow(unused_mut)]
+    pub fn drop_with_heap(mut self, heap: &mut Heap<'c, 'e>) {
+        #[cfg(feature = "dec-ref-check")]
+        {
+            let old = std::mem::replace(&mut self, Object::Dereferenced);
+            if let Self::Ref(id) = &old {
+                heap.dec_ref(*id);
+                std::mem::forget(old);
+            }
+        }
+        #[cfg(not(feature = "dec-ref-check"))]
         if let Self::Ref(id) = self {
             heap.dec_ref(id);
         }
@@ -582,6 +628,8 @@ impl<'c, 'e> Object<'c, 'e> {
             Self::InternString(s) => Self::InternString(s),
             Self::InternBytes(b) => Self::InternBytes(b),
             Self::Ref(_) => panic!("Ref clones must go through clone_with_heap to maintain refcounts"),
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot clone Dereferenced object"),
         }
     }
 
@@ -608,7 +656,44 @@ impl<'c, 'e> Object<'c, 'e> {
             Self::InternString(s) => Self::InternString(s),
             Self::InternBytes(b) => Self::InternBytes(b),
             Self::Ref(id) => Self::Ref(*id), // Caller must increment refcount!
+            #[cfg(feature = "dec-ref-check")]
+            Self::Dereferenced => panic!("Cannot copy Dereferenced object"),
         }
+    }
+
+    #[cfg(feature = "dec-ref-check")]
+    pub fn into_exc(self) -> SimpleException<'c> {
+        if let Self::Exc(exc) = &self {
+            // SAFETY: We're reading the exc out and then forgetting the object shell.
+            // This is safe because:
+            // 1. exc is a valid reference to the SimpleException inside object
+            // 2. We immediately forget object, so Drop won't run and won't try to
+            //    access the now-moved exc
+            // 3. It's only used with the `dref-check` feature enabled for testing
+            let exc_owned = unsafe { std::ptr::read(exc) };
+            std::mem::forget(self);
+            exc_owned
+        } else {
+            panic!("Cannot convert non-exception object into exception")
+        }
+    }
+
+    #[cfg(not(feature = "dec-ref-check"))]
+    pub fn into_exc(self) -> SimpleException<'c> {
+        if let Self::Exc(e) = self {
+            e
+        } else {
+            panic!("Cannot convert non-exception object into exception")
+        }
+    }
+
+    /// Mark as Dereferenced to prevent Drop panic
+    ///
+    /// This should be called from `py_dec_ref_ids` methods only
+    #[cfg(feature = "dec-ref-check")]
+    pub fn dec_ref_forget(&mut self) {
+        let old = std::mem::replace(self, Object::Dereferenced);
+        std::mem::forget(old);
     }
 }
 
@@ -664,6 +749,24 @@ const SINGLETON_ID_MASK: usize = SINGLETON_ID_TAG - 1;
 /// Mask that keeps heap object IDs below the heap tag bit.
 const HEAP_OBJECT_ID_MASK: usize = HEAP_OBJECT_ID_TAG - 1;
 
+/// High-bit tag for Int value-based IDs (no heap allocation needed).
+const INT_ID_TAG: usize = 1usize << (usize::BITS - 5);
+/// High-bit tag for Float value-based IDs.
+const FLOAT_ID_TAG: usize = 1usize << (usize::BITS - 6);
+/// High-bit tag for Range value-based IDs.
+const RANGE_ID_TAG: usize = 1usize << (usize::BITS - 7);
+/// High-bit tag for Exc (exception) value-based IDs.
+const EXC_ID_TAG: usize = 1usize << (usize::BITS - 8);
+/// High-bit tag for Callable value-based IDs.
+const CALLABLE_ID_TAG: usize = 1usize << (usize::BITS - 9);
+
+/// Masks for value-based ID tags (keep bits below the tag bit).
+const INT_ID_MASK: usize = INT_ID_TAG - 1;
+const FLOAT_ID_MASK: usize = FLOAT_ID_TAG - 1;
+const RANGE_ID_MASK: usize = RANGE_ID_TAG - 1;
+const EXC_ID_MASK: usize = EXC_ID_TAG - 1;
+const CALLABLE_ID_MASK: usize = CALLABLE_ID_TAG - 1;
+
 /// Rotate distance used when folding slice length into the pointer identity.
 const INTERN_LEN_ROTATE: u32 = usize::BITS / 2;
 
@@ -699,4 +802,45 @@ const fn singleton_id(slot: SingletonSlot) -> usize {
 #[inline]
 pub fn heap_tagged_id(object_id: ObjectId) -> usize {
     HEAP_OBJECT_ID_TAG | (object_id & HEAP_OBJECT_ID_MASK)
+}
+
+/// Computes a deterministic ID for an i64 integer value.
+/// Uses the value's hash combined with a type tag to ensure uniqueness across types.
+#[inline]
+fn int_value_id(value: i64) -> usize {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    INT_ID_TAG | (hasher.finish() as usize & INT_ID_MASK)
+}
+
+/// Computes a deterministic ID for an f64 float value.
+/// Uses the bit representation's hash for consistency (handles NaN, infinities, etc.).
+#[inline]
+fn float_value_id(value: f64) -> usize {
+    let mut hasher = DefaultHasher::new();
+    value.to_bits().hash(&mut hasher);
+    FLOAT_ID_TAG | (hasher.finish() as usize & FLOAT_ID_MASK)
+}
+
+/// Computes a deterministic ID for a Range value.
+#[inline]
+fn range_value_id(value: i64) -> usize {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    RANGE_ID_TAG | (hasher.finish() as usize & RANGE_ID_MASK)
+}
+
+/// Computes a deterministic ID for an exception based on its hash.
+#[inline]
+fn exc_value_id(exc: &SimpleException<'_>) -> usize {
+    let hash = exc.py_hash() as usize;
+    EXC_ID_TAG | (hash & EXC_ID_MASK)
+}
+
+/// Computes a deterministic ID for a Callable based on its discriminant.
+#[inline]
+fn callable_value_id(c: &Callable<'_>) -> usize {
+    let mut hasher = DefaultHasher::new();
+    std::mem::discriminant(c).hash(&mut hasher);
+    CALLABLE_ID_TAG | (hasher.finish() as usize & CALLABLE_ID_MASK)
 }

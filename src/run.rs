@@ -49,6 +49,18 @@ where
         self.namespace
     }
 
+    /// Cleans up all objects in the namespace by properly decrementing reference counts.
+    ///
+    /// This must be called before dropping the frame to properly clean up heap-allocated
+    /// objects. When the `dec-ref-check` feature is enabled, failing to call this will
+    /// cause a panic if any `Object::Ref` values are in the namespace.
+    #[cfg(feature = "dec-ref-check")]
+    pub fn drop_with_heap(self, heap: &mut Heap<'c, 'e>) {
+        for obj in self.namespace {
+            obj.drop_with_heap(heap);
+        }
+    }
+
     pub fn execute(&mut self, heap: &mut Heap<'c, 'e>, nodes: &'e [Node<'c>]) -> RunResult<'c, FrameExit<'c, 'e>> {
         for node in nodes {
             if let Some(leave) = self.execute_node(heap, node)? {
@@ -115,9 +127,14 @@ where
     fn raise(&mut self, heap: &mut Heap<'c, 'e>, op_exc_expr: Option<&'e ExprLoc<'c>>) -> RunResult<'c, ()> {
         if let Some(exc_expr) = op_exc_expr {
             let object = self.execute_expr(heap, exc_expr)?;
-            match object {
-                Object::Exc(exc) => Err(exc.with_frame(self.stack_frame(&exc_expr.position)).into()),
-                _ => exc_err_static!(ExcType::TypeError; "exceptions must derive from BaseException"),
+            // we check if the object is an exception, then destructure it into a SimpleException
+            // so we have the object available to drop later
+            if matches!(&object, Object::Exc(_)) {
+                let exc = object.into_exc();
+                Err(exc.with_frame(self.stack_frame(&exc_expr.position)).into())
+            } else {
+                object.drop_with_heap(heap);
+                exc_err_static!(ExcType::TypeError; "exceptions must derive from BaseException")
             }
         } else {
             internal_err!(InternalRunError::TodoError; "plain raise not yet supported")
@@ -155,9 +172,8 @@ where
     ) -> RunResult<'c, ()> {
         let new_value = self.execute_expr(heap, expr)?;
         let old_value = std::mem::replace(&mut self.namespace[target.heap_id()], new_value);
-        if let Object::Ref(object_id) = old_value {
-            heap.dec_ref(object_id);
-        }
+        // Drop the old value properly (dec_ref for Refs, no-op for others)
+        old_value.drop_with_heap(heap);
         Ok(())
     }
 
@@ -240,9 +256,8 @@ where
 
     fn define_function(&mut self, heap: &mut Heap<'c, 'e>, function: &'e Function<'c>) {
         let old_value = std::mem::replace(&mut self.namespace[function.name.heap_id()], Object::Function(function));
-        if let Object::Ref(object_id) = old_value {
-            heap.dec_ref(object_id);
-        }
+        // Drop the old value properly (dec_ref for Refs, no-op for others)
+        old_value.drop_with_heap(heap);
     }
 
     fn stack_frame(&self, position: &CodeRange<'c>) -> StackFrame<'c> {

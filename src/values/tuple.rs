@@ -115,10 +115,13 @@ impl<'c, 'e> PyValue<'c, 'e> for Tuple<'c, 'e> {
     /// Pushes all heap object IDs contained in this tuple onto the stack.
     ///
     /// Called during garbage collection to decrement refcounts of nested objects.
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
-        for obj in &self.0 {
+    /// When `dec-ref-check` is enabled, also marks all Objects as Dereferenced.
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>) {
+        for obj in &mut self.0 {
             if let Object::Ref(id) = obj {
                 stack.push(*id);
+                #[cfg(feature = "dec-ref-check")]
+                obj.dec_ref_forget();
             }
         }
     }

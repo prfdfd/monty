@@ -18,8 +18,8 @@ lint-rs:  ## Lint Rust code with fmt and clippy
 	@cargo fmt --version
 	cargo fmt --all
 	@cargo clippy --version
-	cargo clippy --tests -- -D warnings -A incomplete_features -W clippy::dbg_macro
-	cargo check --tests --features ref-counting
+	cargo clippy --tests -- -D warnings -A incomplete_features
+	cargo clippy --tests --all-features -- -D warnings -A incomplete_features
 
 .PHONY: lint-py
 lint-py: ## Lint Python code with ruff
@@ -31,8 +31,8 @@ lint-py: ## Lint Python code with ruff
 lint: lint-rs lint-py ## Lint the code with ruff and clippy
 
 .PHONY: test
-test: ## Run tests
-	cargo test
+test: ## Run tests with dec-ref-check enabled
+	cargo test --features dec-ref-check
 
 .PHONY: test-ref-counting
 test-ref-counting: ## Run tests with ref-counting enabled

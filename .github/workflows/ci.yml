@@ -40,11 +40,14 @@ jobs:
 
       - run: rustc --version --verbose
 
-      - name: Test without ref-counting feature
+      - name: Test without ref-counting feature or dec-ref-check
         run: cargo test
 
       - name: Test with ref-counting feature
         run: cargo test --features ref-counting
+
+      - name: Test with dec-ref-check feature
+        run: cargo test --features dec-ref-check
 
   bench:
     runs-on: ubuntu-latest

@@ -149,10 +149,12 @@ impl<'c, 'e> PyValue<'c, 'e> for List<'c, 'e> {
         true
     }
 
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
-        for obj in &self.0 {
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>) {
+        for obj in &mut self.0 {
             if let Object::Ref(id) = obj {
                 stack.push(*id);
+                #[cfg(feature = "dec-ref-check")]
+                obj.dec_ref_forget();
             }
         }
     }

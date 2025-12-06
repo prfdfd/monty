@@ -59,7 +59,11 @@ pub trait PyValue<'c, 'e> {
     ///
     /// This is called during `dec_ref` to find nested heap references that
     /// need their refcounts decremented when this object is freed.
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>);
+    ///
+    /// When the `dec-ref-check` feature is enabled, this method also marks all
+    /// contained `Object`s as `Dereferenced` to prevent Drop panics. This
+    /// co-locates the cleanup logic with the reference collection logic.
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>);
 
     /// Returns the truthiness of the value following Python semantics.
     ///
@@ -146,14 +150,4 @@ pub trait PyValue<'c, 'e> {
             crate::exceptions::exc_fmt!(e; "'{}' object does not support item assignment", self.py_type(heap)).into()
         })
     }
-
-    // /// Python call operation (`__call__`), e.g., `func(args)`.
-    // ///
-    // /// Returns `Some(result)` if this object is callable, `None` if not callable.
-    // /// The caller should raise a TypeError if this returns `None`.
-    // ///
-    // /// Default implementation returns `None` to indicate the object is not callable.
-    // fn py_call(&self, _heap: &mut Heap<'c, 'e>, _args: ArgObjects<'c, 'e>) -> Option<RunResult<'c, Object<'c, 'e>>> {
-    //     None
-    // }
 }

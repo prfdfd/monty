@@ -65,6 +65,10 @@ impl<'c> Function<'c> {
 
             let result = frame.execute(heap, &self.body);
 
+            // Clean up the frame's namespace before returning
+            #[cfg(feature = "dec-ref-check")]
+            frame.drop_with_heap(heap);
+
             match result {
                 Ok(FrameExit::Return(obj)) => Ok(obj),
                 Ok(FrameExit::Raise(exc)) => Err(exc.into()),

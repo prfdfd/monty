@@ -77,7 +77,7 @@ impl<'c, 'e> PyValue<'c, 'e> for Bytes {
     }
 
     /// Bytes don't contain nested heap references.
-    fn py_dec_ref_ids(&self, _stack: &mut Vec<ObjectId>) {
+    fn py_dec_ref_ids(&mut self, _stack: &mut Vec<ObjectId>) {
         // No-op: bytes don't hold Object references
     }
 

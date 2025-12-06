@@ -107,7 +107,7 @@ impl<'c, 'e> PyValue<'c, 'e> for HeapData<'c, 'e> {
         }
     }
 
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>) {
         match self {
             Self::Object(obj) => obj.py_dec_ref_ids(stack),
             Self::Str(s) => s.py_dec_ref_ids(stack),
@@ -387,10 +387,12 @@ impl<'c, 'e> Heap<'c, 'e> {
         } else if let Some(object) = slot.take() {
             // refcount == 1, free the object and add slot to free list for reuse
             self.free_list.push(id);
-            // then recursively decrement children
-            if let Some(data) = object.data {
+            // Collect child IDs and mark Objects as Dereferenced (when dec-ref-check enabled)
+            if let Some(mut data) = object.data {
                 let mut child_ids = Vec::new();
                 data.py_dec_ref_ids(&mut child_ids);
+                drop(data);
+                // Recursively decrement children
                 for child_id in child_ids {
                     self.dec_ref(child_id);
                 }
@@ -545,6 +547,19 @@ impl<'c, 'e> Heap<'c, 'e> {
 
     /// Removes all objects and resets the ID counter, used between executor runs.
     pub fn clear(&mut self) {
+        // When dec-ref-check is enabled, mark all contained Objects as Dereferenced
+        // before clearing to prevent Drop panics. We use py_dec_ref_ids for this
+        // since it handles the marking (we ignore the collected IDs since we're
+        // clearing everything anyway).
+        #[cfg(feature = "dec-ref-check")]
+        {
+            let mut dummy_stack = Vec::new();
+            for object in self.objects.iter_mut().flatten() {
+                if let Some(data) = &mut object.data {
+                    data.py_dec_ref_ids(&mut dummy_stack);
+                }
+            }
+        }
         self.objects.clear();
         self.free_list.clear();
     }
@@ -612,5 +627,22 @@ impl<'c, 'e> Heap<'c, 'e> {
         };
 
         success
+    }
+}
+
+/// Drop implementation for Heap that marks all contained Objects as Dereferenced
+/// before dropping to prevent panics when the `dec-ref-check` feature is enabled.
+#[cfg(feature = "dec-ref-check")]
+impl Drop for Heap<'_, '_> {
+    fn drop(&mut self) {
+        // Mark all contained Objects as Dereferenced before dropping.
+        // We use py_dec_ref_ids for this since it handles the marking
+        // (we ignore the collected IDs since we're dropping everything anyway).
+        let mut dummy_stack = Vec::new();
+        for object in self.objects.iter_mut().flatten() {
+            if let Some(data) = &mut object.data {
+                data.py_dec_ref_ids(&mut dummy_stack);
+            }
+        }
     }
 }

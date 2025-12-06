@@ -47,8 +47,16 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// Returns Err if any key is unhashable (e.g., list, dict).
     pub fn from_pairs(pairs: Vec<(Object<'c, 'e>, Object<'c, 'e>)>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Self> {
         let mut dict = Self::new();
-        for (key, value) in pairs {
-            dict.set_transfer_ownership(key, value, heap)?;
+        let mut pairs_iter = pairs.into_iter();
+        for (key, value) in pairs_iter.by_ref() {
+            if let Err(err) = dict.set_transfer_ownership(key, value, heap) {
+                for (k, v) in pairs_iter {
+                    k.drop_with_heap(heap);
+                    v.drop_with_heap(heap);
+                }
+                dict.drop_all_entries(heap);
+                return Err(err);
+            }
         }
         Ok(dict)
     }
@@ -63,9 +71,13 @@ impl<'c, 'e> Dict<'c, 'e> {
         value: Object<'c, 'e>,
         heap: &mut Heap<'c, 'e>,
     ) -> RunResult<'c, Option<Object<'c, 'e>>> {
-        let hash = key
-            .py_hash_u64(heap)
-            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(heap)))?;
+        let Some(hash) = key.py_hash_u64(heap) else {
+            // Key is unhashable - clean up before returning error
+            let err = ExcType::type_error_unhashable(key.py_type(heap));
+            key.drop_with_heap(heap);
+            value.drop_with_heap(heap);
+            return Err(err);
+        };
 
         let bucket = self.map.entry(hash).or_default();
 
@@ -83,6 +95,15 @@ impl<'c, 'e> Dict<'c, 'e> {
         // Key doesn't exist, add new pair
         bucket.push((key, value));
         Ok(None)
+    }
+
+    fn drop_all_entries(&mut self, heap: &mut Heap<'c, 'e>) {
+        for bucket in self.map.values_mut() {
+            for (key, value) in bucket.drain(..) {
+                key.drop_with_heap(heap);
+                value.drop_with_heap(heap);
+            }
+        }
     }
 
     /// Gets a value from the dict by key.
@@ -279,14 +300,18 @@ impl<'c, 'e> PyValue<'c, 'e> for Dict<'c, 'e> {
         true
     }
 
-    fn py_dec_ref_ids(&self, stack: &mut Vec<ObjectId>) {
-        for bucket in self.map.values() {
-            for (k, v) in bucket {
-                if let Object::Ref(id) = k {
+    fn py_dec_ref_ids(&mut self, stack: &mut Vec<ObjectId>) {
+        for bucket in self.map.values_mut() {
+            for (key, value) in bucket {
+                if let Object::Ref(id) = key {
                     stack.push(*id);
+                    #[cfg(feature = "dec-ref-check")]
+                    key.dec_ref_forget();
                 }
-                if let Object::Ref(id) = v {
+                if let Object::Ref(id) = value {
                     stack.push(*id);
+                    #[cfg(feature = "dec-ref-check")]
+                    value.dec_ref_forget();
                 }
             }
         }
@@ -350,18 +375,35 @@ impl<'c, 'e> PyValue<'c, 'e> for Dict<'c, 'e> {
             Attr::Get => {
                 let (key, opt_default) = args.get_one_two_args("get")?;
                 // Use copy_for_extend to avoid borrow conflict, then increment refcount
-                let result = self.get(&key, heap)?.map(Object::copy_for_extend);
+                let result = match self.get(&key, heap) {
+                    Ok(value) => value.map(Object::copy_for_extend),
+                    Err(err) => {
+                        key.drop_with_heap(heap);
+                        if let Some(default) = opt_default {
+                            default.drop_with_heap(heap);
+                        }
+                        return Err(err);
+                    }
+                };
+
+                // Clean up the key since we're done with it
+                key.drop_with_heap(heap);
+
                 match result {
                     Some(value) => {
                         if let Object::Ref(id) = &value {
                             heap.inc_ref(*id);
                         }
+                        // Clean up unused default if present
+                        if let Some(default) = opt_default {
+                            default.drop_with_heap(heap);
+                        }
                         Ok(value)
                     }
                     None => {
-                        // Return default if provided, else None
+                        // Return default if provided (transfer ownership), else None
                         if let Some(default) = opt_default {
-                            Ok(default.clone_with_heap(heap))
+                            Ok(default)
                         } else {
                             Ok(Object::None)
                         }
@@ -397,18 +439,49 @@ impl<'c, 'e> PyValue<'c, 'e> for Dict<'c, 'e> {
             }
             Attr::Pop => {
                 let (key, opt_default) = args.get_one_two_args("pop")?;
-                match self.pop(&key, heap)? {
+                // If key is unhashable, CPython returns the default when provided, else TypeError.
+                if key.py_hash_u64(heap).is_none() {
+                    return if let Some(default) = opt_default {
+                        key.drop_with_heap(heap);
+                        Ok(default)
+                    } else {
+                        let err = ExcType::type_error_unhashable(key.py_type(heap));
+                        key.drop_with_heap(heap);
+                        Err(err)
+                    };
+                }
+                let pop_result = match self.pop(&key, heap) {
+                    Ok(result) => result,
+                    Err(err) => {
+                        key.drop_with_heap(heap);
+                        if let Some(default) = opt_default {
+                            default.drop_with_heap(heap);
+                        }
+                        return Err(err);
+                    }
+                };
+                match pop_result {
                     Some((k, v)) => {
                         // Decrement key refcount since we're not returning it
                         k.drop_with_heap(heap);
+                        // Clean up the argument key and unused default
+                        key.drop_with_heap(heap);
+                        if let Some(default) = opt_default {
+                            default.drop_with_heap(heap);
+                        }
                         Ok(v)
                     }
                     None => {
-                        // Return default if provided, else KeyError
+                        // Return default if provided (transfer ownership), else KeyError
                         if let Some(default) = opt_default {
-                            Ok(default.clone_with_heap(heap))
+                            // Clean up the argument key
+                            key.drop_with_heap(heap);
+                            Ok(default)
                         } else {
-                            Err(ExcType::key_error(&key, heap))
+                            // Create error before dropping key (key_error needs to read key's repr)
+                            let err = ExcType::key_error(&key, heap);
+                            key.drop_with_heap(heap);
+                            Err(err)
                         }
                     }
                 }

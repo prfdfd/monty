@@ -45,6 +45,17 @@ pub struct Value<'c, 'e> {
     heap: Heap<'c, 'e>,
 }
 
+/// Drop implementation to properly clean up the Object via `drop_with_heap`.
+/// This prevents panics when `dec-ref-check` feature is enabled by ensuring
+/// the Object's reference count is properly decremented before dropping.
+impl Drop for Value<'_, '_> {
+    fn drop(&mut self) {
+        // Replace the object with a safe value, then properly clean it up
+        let obj = std::mem::replace(&mut self.object, Object::None);
+        obj.drop_with_heap(&mut self.heap);
+    }
+}
+
 impl fmt::Display for Value<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.py_str())

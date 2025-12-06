@@ -9,5 +9,5 @@
 - [x] Phase 4: Support `is`/`is not` via object identity.
 - [x] Phase 5: Update list/string mutation paths to work with shared references.
 - [ ] Phase 6: Cycle detection (mark-sweep GC) — required before closures/classes per plan.md:859.
-- [ ] Phase 7: String interning / other optimizations.
+- [x] Phase 7: String interning / other optimizations.
 - [ ] Phase 8: Scope chain design (LEGB resolution) — needed for closures/global/nonlocal per plan.md:861.

@@ -96,10 +96,15 @@ pub(crate) fn evaluate_discard<'c, 'e>(
         Expr::Name(ident) => namespace_get_mut(namespace, ident).map(|_| ()),
         Expr::Call { callable, args } => {
             let args = evaluate_args(namespace, heap, args)?;
-            callable.call(namespace, heap, args)?;
+            let result = callable.call(namespace, heap, args)?;
+            result.drop_with_heap(heap);
             Ok(())
         }
-        Expr::AttrCall { object, attr, args } => attr_call(namespace, heap, object, attr, args).map(|_| ()),
+        Expr::AttrCall { object, attr, args } => {
+            let result = attr_call(namespace, heap, object, attr, args)?;
+            result.drop_with_heap(heap);
+            Ok(())
+        }
         Expr::Op { left, op, right } => {
             // Handle and/or with short-circuit evaluation
             let result = match op {
@@ -263,8 +268,8 @@ fn cmp_op<'c, 'e>(
     op: &CmpOperator,
     right: &'e ExprLoc<'c>,
 ) -> RunResult<'c, bool> {
-    let mut left_object = evaluate_use(namespace, heap, left)?;
-    let mut right_object = evaluate_use(namespace, heap, right)?;
+    let left_object = evaluate_use(namespace, heap, left)?;
+    let right_object = evaluate_use(namespace, heap, right)?;
 
     let result = match op {
         CmpOperator::Eq => Some(left_object.py_eq(&right_object, heap)),
@@ -273,8 +278,8 @@ fn cmp_op<'c, 'e>(
         CmpOperator::GtE => left_object.py_cmp(&right_object, heap).map(Ordering::is_ge),
         CmpOperator::Lt => left_object.py_cmp(&right_object, heap).map(Ordering::is_lt),
         CmpOperator::LtE => left_object.py_cmp(&right_object, heap).map(Ordering::is_le),
-        CmpOperator::Is => Some(left_object.is(heap, &mut right_object)),
-        CmpOperator::IsNot => Some(!left_object.is(heap, &mut right_object)),
+        CmpOperator::Is => Some(left_object.is(&right_object)),
+        CmpOperator::IsNot => Some(!left_object.is(&right_object)),
         CmpOperator::ModEq(v) => left_object.py_mod_eq(&right_object, *v),
         _ => None,
     };
