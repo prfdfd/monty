@@ -7,6 +7,7 @@ use strum::{AsRefStr, Display, EnumString};
 use crate::args::ArgValues;
 use crate::exceptions::{exc_err_fmt, ExcType};
 use crate::heap::{Heap, HeapData};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::Value;
 use crate::values::PyTrait;
@@ -29,7 +30,11 @@ pub enum Builtins {
 
 impl Builtins {
     /// Executes the builtin with the provided positional arguments.
-    pub fn call<'c, 'e>(self, heap: &mut Heap<'c, 'e>, args: ArgValues<'c, 'e>) -> RunResult<'c, Value<'c, 'e>> {
+    pub fn call<'c, 'e, T: ResourceTracker>(
+        self,
+        heap: &mut Heap<'c, 'e, T>,
+        args: ArgValues<'c, 'e>,
+    ) -> RunResult<'c, Value<'c, 'e>> {
         match self {
             Self::Print => {
                 match args {
@@ -69,13 +74,13 @@ impl Builtins {
             }
             Self::Str => {
                 let value = args.get_one_arg("str")?;
-                let heap_id = heap.allocate(HeapData::Str(value.py_str(heap).into_owned().into()));
+                let heap_id = heap.allocate(HeapData::Str(value.py_str(heap).into_owned().into()))?;
                 value.drop_with_heap(heap);
                 Ok(Value::Ref(heap_id))
             }
             Self::Repr => {
                 let value = args.get_one_arg("repr")?;
-                let heap_id = heap.allocate(HeapData::Str(value.py_repr(heap).into_owned().into()));
+                let heap_id = heap.allocate(HeapData::Str(value.py_repr(heap).into_owned().into()))?;
                 value.drop_with_heap(heap);
                 Ok(Value::Ref(heap_id))
             }
@@ -105,7 +110,7 @@ impl Builtins {
                 let value = args.get_one_arg("hash")?;
                 let result = match value.py_hash_u64(heap) {
                     Some(hash) => Ok(Value::Int(hash as i64)),
-                    None => Err(ExcType::type_error_unhashable(value.py_type(heap))),
+                    None => Err(ExcType::type_error_unhashable(value.py_type(Some(heap)))),
                 };
                 value.drop_with_heap(heap);
                 result

@@ -7,6 +7,7 @@ use crate::fstring::evaluate_fstring;
 use crate::heap::{Heap, HeapData};
 use crate::namespace::Namespaces;
 use crate::operators::{CmpOperator, Operator};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::{Attr, Value};
 use crate::values::{Dict, List, PyTrait};
@@ -18,10 +19,10 @@ use crate::values::{Dict, List, PyTrait};
 /// * `local_idx` - Index of the local namespace in namespaces
 /// * `heap` - The heap for allocating objects
 /// * `expr_loc` - The expression to evaluate
-pub(crate) fn evaluate_use<'c, 'e>(
+pub(crate) fn evaluate_use<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     expr_loc: &'e ExprLoc<'c>,
 ) -> RunResult<'c, Value<'c, 'e>> {
     match &expr_loc.expr {
@@ -46,7 +47,7 @@ pub(crate) fn evaluate_use<'c, 'e>(
                 .iter()
                 .map(|e| evaluate_use(namespaces, local_idx, heap, e))
                 .collect::<RunResult<_>>()?;
-            let heap_id = heap.allocate(HeapData::List(List::new(values)));
+            let heap_id = heap.allocate(HeapData::List(List::new(values)))?;
             Ok(Value::Ref(heap_id))
         }
         Expr::Tuple(elements) => {
@@ -54,7 +55,7 @@ pub(crate) fn evaluate_use<'c, 'e>(
                 .iter()
                 .map(|e| evaluate_use(namespaces, local_idx, heap, e))
                 .collect::<RunResult<_>>()?;
-            let heap_id = heap.allocate(HeapData::Tuple(values));
+            let heap_id = heap.allocate(HeapData::Tuple(values))?;
             Ok(Value::Ref(heap_id))
         }
         Expr::Subscript { object, index } => {
@@ -74,7 +75,7 @@ pub(crate) fn evaluate_use<'c, 'e>(
                 eval_pairs.push((key, value));
             }
             let dict = Dict::from_pairs(eval_pairs, heap)?;
-            let dict_id = heap.allocate(HeapData::Dict(dict));
+            let dict_id = heap.allocate(HeapData::Dict(dict))?;
             Ok(Value::Ref(dict_id))
         }
         Expr::Not(operand) => {
@@ -90,7 +91,7 @@ pub(crate) fn evaluate_use<'c, 'e>(
                 Value::Float(f) => Ok(Value::Float(-f)),
                 _ => {
                     use crate::exceptions::{exc_fmt, ExcType};
-                    let type_name = val.py_type(heap);
+                    let type_name = val.py_type(Some(heap));
                     // Drop the value before returning error to avoid ref counting leak
                     val.drop_with_heap(heap);
                     Err(
@@ -112,10 +113,10 @@ pub(crate) fn evaluate_use<'c, 'e>(
 /// * `local_idx` - Index of the local namespace in namespaces
 /// * `heap` - The heap for allocating objects
 /// * `expr_loc` - The expression to evaluate
-pub(crate) fn evaluate_discard<'c, 'e>(
+pub(crate) fn evaluate_discard<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     expr_loc: &'e ExprLoc<'c>,
 ) -> RunResult<'c, ()> {
     match &expr_loc.expr {
@@ -204,10 +205,10 @@ pub(crate) fn evaluate_discard<'c, 'e>(
 /// * `local_idx` - Index of the local namespace in namespaces
 /// * `heap` - The heap for allocating objects
 /// * `expr_loc` - The expression to evaluate
-pub(crate) fn evaluate_bool<'c, 'e>(
+pub(crate) fn evaluate_bool<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     expr_loc: &'e ExprLoc<'c>,
 ) -> RunResult<'c, bool> {
     match &expr_loc.expr {
@@ -241,10 +242,10 @@ pub(crate) fn evaluate_bool<'c, 'e>(
 }
 
 /// Evaluates a binary operator expression (`+, -, %`, etc.).
-fn eval_op<'c, 'e>(
+fn eval_op<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     left: &'e ExprLoc<'c>,
     op: &Operator,
     right: &'e ExprLoc<'c>,
@@ -252,8 +253,8 @@ fn eval_op<'c, 'e>(
     let lhs = evaluate_use(namespaces, local_idx, heap, left)?;
     let rhs = evaluate_use(namespaces, local_idx, heap, right)?;
     let op_result: Option<Value> = match op {
-        Operator::Add => lhs.py_add(&rhs, heap),
-        Operator::Sub => lhs.py_sub(&rhs, heap),
+        Operator::Add => lhs.py_add(&rhs, heap)?,
+        Operator::Sub => lhs.py_sub(&rhs, heap)?,
         Operator::Mod => lhs.py_mod(&rhs),
         _ => {
             // Drop temporary references before early return
@@ -268,8 +269,8 @@ fn eval_op<'c, 'e>(
         rhs.drop_with_heap(heap);
         Ok(object)
     } else {
-        let lhs_type = lhs.py_type(heap);
-        let rhs_type = rhs.py_type(heap);
+        let lhs_type = lhs.py_type(Some(heap));
+        let rhs_type = rhs.py_type(Some(heap));
         // Drop temporary references before returning error
         lhs.drop_with_heap(heap);
         rhs.drop_with_heap(heap);
@@ -280,10 +281,10 @@ fn eval_op<'c, 'e>(
 /// Helper to evaluate the `and` operator with short-circuit evaluation.
 ///
 /// Returns the first falsy value encountered, or the last value if all are truthy.
-fn eval_and<'c, 'e>(
+fn eval_and<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     left: &'e ExprLoc<'c>,
     right: &'e ExprLoc<'c>,
 ) -> RunResult<'c, Value<'c, 'e>> {
@@ -301,10 +302,10 @@ fn eval_and<'c, 'e>(
 /// Helper to evaluate the `or` operator with short-circuit semantics.
 ///
 /// Returns the first truthy value encountered, or the last value if all are falsy.
-fn eval_or<'c, 'e>(
+fn eval_or<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     left: &'e ExprLoc<'c>,
     right: &'e ExprLoc<'c>,
 ) -> RunResult<'c, Value<'c, 'e>> {
@@ -324,10 +325,10 @@ fn eval_or<'c, 'e>(
 /// Comparisons always return bool because Python chained comparisons
 /// (e.g., `1 < x < 10`) would need the intermediate value, but we don't
 /// support chaining yet, so we can return bool directly.
-fn cmp_op<'c, 'e>(
+fn cmp_op<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     left: &'e ExprLoc<'c>,
     op: &CmpOperator,
     right: &'e ExprLoc<'c>,
@@ -354,8 +355,8 @@ fn cmp_op<'c, 'e>(
         rhs.drop_with_heap(heap);
         Ok(v)
     } else {
-        let left_type = lhs.py_type(heap);
-        let right_type = rhs.py_type(heap);
+        let left_type = lhs.py_type(Some(heap));
+        let right_type = rhs.py_type(Some(heap));
         lhs.drop_with_heap(heap);
         rhs.drop_with_heap(heap);
         SimpleException::cmp_type_error(left, op, right, left_type, right_type)
@@ -366,10 +367,10 @@ fn cmp_op<'c, 'e>(
 ///
 /// This evaluates `object`, looks up `attr`, calls the method with `args`,
 /// and handles proper cleanup of temporary values.
-fn attr_call<'c, 'e>(
+fn attr_call<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     object_ident: &Identifier<'c>,
     attr: &Attr,
     args: &'e ArgExprs<'c>,
@@ -396,10 +397,10 @@ fn attr_call<'c, 'e>(
 }
 
 /// Evaluates function call arguments from expressions to values.
-fn evaluate_args<'c, 'e>(
+fn evaluate_args<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     args_expr: &'e ArgExprs<'c>,
 ) -> RunResult<'c, ArgValues<'c, 'e>> {
     match args_expr {

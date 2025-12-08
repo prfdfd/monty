@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use crate::args::ArgValues;
 use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapData, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::{Attr, Value};
 use crate::values::PyTrait;
@@ -63,7 +64,7 @@ impl<'c, 'e> List<'c, 'e> {
     /// incremented. This should be used instead of `.clone()` which would
     /// bypass reference counting.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+    pub fn clone_with_heap<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Self {
         let cloned: Vec<Value<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         Self(cloned)
     }
@@ -75,7 +76,7 @@ impl<'c, 'e> List<'c, 'e> {
     /// was already incremented (e.g., via `clone_with_heap` or `evaluate_use`).
     ///
     /// Returns `Value::None`, matching Python's behavior where `list.append()` returns None.
-    pub fn append(&mut self, _heap: &mut Heap<'c, 'e>, item: Value<'c, 'e>) {
+    pub fn append<T: ResourceTracker>(&mut self, _heap: &mut Heap<'c, 'e, T>, item: Value<'c, 'e>) {
         // Ownership transfer - refcount was already handled by caller
         self.0.push(item);
     }
@@ -91,7 +92,7 @@ impl<'c, 'e> List<'c, 'e> {
     ///   the item is appended to the end (matching Python semantics).
     ///
     /// Returns `Value::None`, matching Python's behavior where `list.insert()` returns None.
-    pub fn insert(&mut self, _heap: &mut Heap<'c, 'e>, index: usize, item: Value<'c, 'e>) {
+    pub fn insert<T: ResourceTracker>(&mut self, _heap: &mut Heap<'c, 'e, T>, index: usize, item: Value<'c, 'e>) {
         // Ownership transfer - refcount was already handled by caller
         // Python's insert() appends if index is out of bounds
         if index >= self.0.len() {
@@ -109,19 +110,27 @@ impl<'c, 'e> From<List<'c, 'e>> for Vec<Value<'c, 'e>> {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for List<'c, 'e> {
-    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, _heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         "list"
     }
 
-    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
+    fn py_estimate_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.0.len() * std::mem::size_of::<Value>()
+    }
+
+    fn py_len<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_getitem(&self, key: &Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Value<'c, 'e>> {
+    fn py_getitem<T: ResourceTracker>(
+        &self,
+        key: &Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, Value<'c, 'e>> {
         // Extract integer index from key, returning TypeError if not an int
         let index = match key {
             Value::Int(i) => *i,
-            _ => return Err(ExcType::type_error_indices("list", key.py_type(heap))),
+            _ => return Err(ExcType::type_error_indices("list", key.py_type(Some(heap)))),
         };
 
         // Convert to usize, handling negative indices (Python-style: -1 = last element)
@@ -137,7 +146,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for List<'c, 'e> {
         Ok(self.0[normalized_index as usize].clone_with_heap(heap))
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> bool {
         if self.0.len() != other.0.len() {
             return false;
         }
@@ -159,26 +168,35 @@ impl<'c, 'e> PyTrait<'c, 'e> for List<'c, 'e> {
         }
     }
 
-    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         Cow::Owned(repr_sequence('[', ']', &self.0, heap))
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Value<'c, 'e>> {
+    fn py_add<T: ResourceTracker>(
+        &self,
+        other: &Self,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Value<'c, 'e>>, crate::resource::ResourceError> {
         // Clone both lists' contents with proper refcounting
         let mut result: Vec<Value<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         let other_cloned: Vec<Value<'c, 'e>> = other.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         result.extend(other_cloned);
-        let id = heap.allocate(HeapData::List(List::new(result)));
-        Some(Value::Ref(id))
+        let id = heap.allocate(HeapData::List(List::new(result)))?;
+        Ok(Some(Value::Ref(id)))
     }
 
-    fn py_iadd(&mut self, other: Value<'c, 'e>, heap: &mut Heap<'c, 'e>, self_id: Option<HeapId>) -> bool {
+    fn py_iadd<T: ResourceTracker>(
+        &mut self,
+        other: Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+        self_id: Option<HeapId>,
+    ) -> Result<bool, crate::resource::ResourceError> {
         // Extract the value ID first, keeping `other` around to drop later
-        let Value::Ref(other_id) = &other else { return false };
+        let Value::Ref(other_id) = &other else { return Ok(false) };
 
         if Some(*other_id) == self_id {
             // Self-extend: clone our own items with proper refcounting
@@ -188,18 +206,18 @@ impl<'c, 'e> PyTrait<'c, 'e> for List<'c, 'e> {
             // Get items from other list using iadd_extend_from_heap helper
             // This handles the borrow checker limitations with lifetime propagation
             if !heap.iadd_extend_list(*other_id, &mut self.0) {
-                return false;
+                return Ok(false);
             }
         }
 
         // Drop the other value - we've extracted its contents and are done with the temporary reference
         other.drop_with_heap(heap);
-        true
+        Ok(true)
     }
 
-    fn py_call_attr(
+    fn py_call_attr<T: ResourceTracker>(
         &mut self,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         attr: &Attr,
         args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>> {
@@ -233,7 +251,12 @@ impl<'c, 'e> PyTrait<'c, 'e> for List<'c, 'e> {
 ///
 /// # Returns
 /// A string representation like "[1, 2, 3]" or "(1, 2, 3)"
-pub(crate) fn repr_sequence<'c, 'e>(start: char, end: char, items: &[Value<'c, 'e>], heap: &Heap<'c, 'e>) -> String {
+pub(crate) fn repr_sequence<'c, 'e, T: ResourceTracker>(
+    start: char,
+    end: char,
+    items: &[Value<'c, 'e>],
+    heap: &Heap<'c, 'e, T>,
+) -> String {
     let mut s = String::from(start);
     let mut iter = items.iter();
     if let Some(first) = iter.next() {

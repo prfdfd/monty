@@ -1,6 +1,7 @@
 use crate::exceptions::{ExcType, SimpleException};
 use crate::expressions::{Identifier, NameScope};
-use crate::heap::Heap;
+use crate::heap::{Heap, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::Value;
 
@@ -75,7 +76,7 @@ impl<'c, 'e> Namespaces<'c, 'e> {
     ///
     /// # Panics
     /// Panics if attempting to pop the global namespace (index 0).
-    pub fn pop_with_heap(&mut self, heap: &mut Heap<'c, 'e>) {
+    pub fn pop_with_heap<T: ResourceTracker>(&mut self, heap: &mut Heap<'c, 'e, T>) {
         debug_assert!(self.namespaces.len() > 1, "cannot pop global namespace");
         if let Some(namespace) = self.namespaces.pop() {
             for value in namespace {
@@ -91,7 +92,7 @@ impl<'c, 'e> Namespaces<'c, 'e> {
     ///
     /// Only needed when `dec-ref-check` is enabled, since the Drop impl panics on unfreed Refs.
     #[cfg(feature = "dec-ref-check")]
-    pub fn drop_global_with_heap(&mut self, heap: &mut Heap<'c, 'e>) {
+    pub fn drop_global_with_heap<T: ResourceTracker>(&mut self, heap: &mut Heap<'c, 'e, T>) {
         let global = self.get_mut(GLOBAL_NS_IDX);
         for value in global.iter_mut() {
             let v = std::mem::replace(value, Value::Undefined);
@@ -143,10 +144,10 @@ impl<'c, 'e> Namespaces<'c, 'e> {
     ///
     /// # Returns
     /// A cloned copy of the value (with refcount incremented for Ref values), or NameError if undefined.
-    pub fn get_var_value(
+    pub fn get_var_value<T: ResourceTracker>(
         &mut self,
         local_idx: usize,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         ident: &Identifier<'c>,
     ) -> RunResult<'c, Value<'c, 'e>> {
         // Determine which namespace to use
@@ -187,5 +188,17 @@ impl<'c, 'e> Namespaces<'c, 'e> {
     #[cfg(feature = "ref-counting")]
     pub fn into_global(mut self) -> Vec<Value<'c, 'e>> {
         self.namespaces.swap_remove(GLOBAL_NS_IDX)
+    }
+
+    /// Returns an iterator over all HeapIds referenced by values in all namespaces.
+    ///
+    /// This is used by garbage collection to find all root references. Any heap
+    /// object reachable from these roots should not be collected.
+    pub fn iter_heap_ids(&self) -> impl Iterator<Item = HeapId> + '_ {
+        self.namespaces.iter().flat_map(|namespace| {
+            namespace
+                .iter()
+                .filter_map(|value| if let Value::Ref(id) = value { Some(*id) } else { None })
+        })
     }
 }

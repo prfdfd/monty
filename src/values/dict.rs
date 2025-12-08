@@ -6,9 +6,10 @@ use indexmap::IndexMap;
 use crate::args::ArgValues;
 use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapData, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::{Attr, Value};
-use crate::values::PyTrait;
+use crate::values::{List, PyTrait};
 
 /// Python dict type, wrapping an IndexMap to preserve insertion order.
 ///
@@ -49,7 +50,10 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// Assumes the caller is transferring ownership of all keys and values in the pairs.
     /// Does NOT increment reference counts since ownership is being transferred.
     /// Returns Err if any key is unhashable (e.g., list, dict).
-    pub fn from_pairs(pairs: Vec<(Value<'c, 'e>, Value<'c, 'e>)>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Self> {
+    pub fn from_pairs<T: ResourceTracker>(
+        pairs: Vec<(Value<'c, 'e>, Value<'c, 'e>)>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, Self> {
         let mut dict = Self::new();
         let mut pairs_iter = pairs.into_iter();
         for (key, value) in pairs_iter.by_ref() {
@@ -69,15 +73,15 @@ impl<'c, 'e> Dict<'c, 'e> {
     ///
     /// Used when ownership is being transferred (e.g., from_pairs) rather than shared.
     /// The caller must ensure the values' refcounts already account for this dict's reference.
-    fn set_transfer_ownership(
+    fn set_transfer_ownership<T: ResourceTracker>(
         &mut self,
         key: Value<'c, 'e>,
         value: Value<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
     ) -> RunResult<'c, Option<Value<'c, 'e>>> {
         let Some(hash) = key.py_hash_u64(heap) else {
             // Key is unhashable - clean up before returning error
-            let err = ExcType::type_error_unhashable(key.py_type(heap));
+            let err = ExcType::type_error_unhashable(key.py_type(Some(heap)));
             key.drop_with_heap(heap);
             value.drop_with_heap(heap);
             return Err(err);
@@ -101,7 +105,7 @@ impl<'c, 'e> Dict<'c, 'e> {
         Ok(None)
     }
 
-    fn drop_all_entries(&mut self, heap: &mut Heap<'c, 'e>) {
+    fn drop_all_entries<T: ResourceTracker>(&mut self, heap: &mut Heap<'c, 'e, T>) {
         for bucket in self.map.values_mut() {
             for (key, value) in bucket.drain(..) {
                 key.drop_with_heap(heap);
@@ -114,10 +118,14 @@ impl<'c, 'e> Dict<'c, 'e> {
     ///
     /// Returns Ok(Some(value)) if key exists, Ok(None) if key doesn't exist.
     /// Returns Err if key is unhashable.
-    pub fn get(&self, key: &Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Option<&Value<'c, 'e>>> {
+    pub fn get<T: ResourceTracker>(
+        &self,
+        key: &Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, Option<&Value<'c, 'e>>> {
         let hash = key
             .py_hash_u64(heap)
-            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(heap)))?;
+            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(Some(heap))))?;
         if let Some(bucket) = self.map.get(&hash) {
             for (k, v) in bucket {
                 if k.py_eq(key, heap) {
@@ -137,15 +145,15 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// If the key already exists, replaces the old value and returns it (caller now
     /// owns the old value and is responsible for its refcount).
     /// Returns Err if key is unhashable.
-    pub fn set(
+    pub fn set<T: ResourceTracker>(
         &mut self,
         key: Value<'c, 'e>,
         value: Value<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
     ) -> RunResult<'c, Option<Value<'c, 'e>>> {
         let hash = key
             .py_hash_u64(heap)
-            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(heap)))?;
+            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(Some(heap))))?;
 
         let bucket = self.map.entry(hash).or_default();
 
@@ -174,14 +182,14 @@ impl<'c, 'e> Dict<'c, 'e> {
     ///
     /// Reference counting: does not decrement refcounts for removed key and value;
     /// caller assumes ownership and is responsible for managing their refcounts.
-    pub fn pop(
+    pub fn pop<T: ResourceTracker>(
         &mut self,
         key: &Value<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
     ) -> RunResult<'c, Option<(Value<'c, 'e>, Value<'c, 'e>)>> {
         let hash = key
             .py_hash_u64(heap)
-            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(heap)))?;
+            .ok_or_else(|| ExcType::type_error_unhashable(key.py_type(Some(heap))))?;
 
         if let Some(bucket) = self.map.get_mut(&hash) {
             for (i, (k, _v)) in bucket.iter().enumerate() {
@@ -203,7 +211,7 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// Each key's reference count is incremented since the returned vector
     /// now holds additional references to these values.
     #[must_use]
-    pub fn keys(&self, heap: &mut Heap<'c, 'e>) -> Vec<Value<'c, 'e>> {
+    pub fn keys<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Vec<Value<'c, 'e>> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (k, _v) in bucket {
@@ -218,7 +226,7 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// Each value's reference count is incremented since the returned vector
     /// now holds additional references to these values.
     #[must_use]
-    pub fn values(&self, heap: &mut Heap<'c, 'e>) -> Vec<Value<'c, 'e>> {
+    pub fn values_list<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Vec<Value<'c, 'e>> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (_k, v) in bucket {
@@ -233,7 +241,7 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// Each key and value's reference count is incremented since the returned vector
     /// now holds additional references to these values.
     #[must_use]
-    pub fn items(&self, heap: &mut Heap<'c, 'e>) -> Vec<(Value<'c, 'e>, Value<'c, 'e>)> {
+    pub fn items<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Vec<(Value<'c, 'e>, Value<'c, 'e>)> {
         let mut result = Vec::new();
         for bucket in self.map.values() {
             for (k, v) in bucket {
@@ -261,7 +269,7 @@ impl<'c, 'e> Dict<'c, 'e> {
     /// incremented. This should be used instead of `.clone()` which would
     /// bypass reference counting.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+    pub fn clone_with_heap<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Self {
         let mut new_map = IndexMap::new();
         for (hash, bucket) in &self.map {
             let new_bucket: Vec<(Value<'c, 'e>, Value<'c, 'e>)> = bucket
@@ -275,15 +283,20 @@ impl<'c, 'e> Dict<'c, 'e> {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for Dict<'c, 'e> {
-    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, _heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         "dict"
     }
 
-    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
+    fn py_estimate_size(&self) -> usize {
+        // Dict size: struct overhead + entries (2 Values per entry for key+value)
+        std::mem::size_of::<Self>() + self.len() * 2 * std::mem::size_of::<Value>()
+    }
+
+    fn py_len<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> Option<usize> {
         Some(self.len())
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> bool {
         if self.len() != other.len() {
             return false;
         }
@@ -321,11 +334,11 @@ impl<'c, 'e> PyTrait<'c, 'e> for Dict<'c, 'e> {
         }
     }
 
-    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> bool {
         !self.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         if self.is_empty() {
             return Cow::Borrowed("{}");
         }
@@ -347,7 +360,11 @@ impl<'c, 'e> PyTrait<'c, 'e> for Dict<'c, 'e> {
         Cow::Owned(s)
     }
 
-    fn py_getitem(&self, key: &Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Value<'c, 'e>> {
+    fn py_getitem<T: ResourceTracker>(
+        &self,
+        key: &Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, Value<'c, 'e>> {
         // Use copy_for_extend to avoid borrow conflict, then increment refcount
         let result = self.get(key, heap)?.map(Value::copy_for_extend);
         match result {
@@ -361,7 +378,12 @@ impl<'c, 'e> PyTrait<'c, 'e> for Dict<'c, 'e> {
         }
     }
 
-    fn py_setitem(&mut self, key: Value<'c, 'e>, value: Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, ()> {
+    fn py_setitem<T: ResourceTracker>(
+        &mut self,
+        key: Value<'c, 'e>,
+        value: Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, ()> {
         // Drop the old value if one was replaced
         if let Some(old_value) = self.set(key, value, heap)? {
             old_value.drop_with_heap(heap);
@@ -369,128 +391,97 @@ impl<'c, 'e> PyTrait<'c, 'e> for Dict<'c, 'e> {
         Ok(())
     }
 
-    fn py_call_attr(
+    fn py_call_attr<T: ResourceTracker>(
         &mut self,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         attr: &Attr,
         args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>> {
         match attr {
+            #[allow(clippy::manual_let_else)]
             Attr::Get => {
-                let (key, opt_default) = args.get_one_two_args("get")?;
-                // Use copy_for_extend to avoid borrow conflict, then increment refcount
+                // dict.get() accepts 1 or 2 arguments
+                let (key, default) = args.get_one_two_args("get")?;
+                let default = default.unwrap_or(Value::None);
+                // Handle the lookup - may fail for unhashable keys
                 let result = match self.get(&key, heap) {
-                    Ok(value) => value.map(Value::copy_for_extend),
-                    Err(err) => {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Drop key and default before returning error
                         key.drop_with_heap(heap);
-                        if let Some(default) = opt_default {
-                            default.drop_with_heap(heap);
-                        }
-                        return Err(err);
+                        default.drop_with_heap(heap);
+                        return Err(e);
                     }
                 };
-
-                // Clean up the key since we're done with it
+                let value = match result {
+                    Some(v) => v.clone_with_heap(heap),
+                    None => default.clone_with_heap(heap),
+                };
+                // Drop the key and default arguments
                 key.drop_with_heap(heap);
-
-                match result {
-                    Some(value) => {
-                        if let Value::Ref(id) = &value {
-                            heap.inc_ref(*id);
-                        }
-                        // Clean up unused default if present
-                        if let Some(default) = opt_default {
-                            default.drop_with_heap(heap);
-                        }
-                        Ok(value)
-                    }
-                    None => {
-                        // Return default if provided (transfer ownership), else None
-                        if let Some(default) = opt_default {
-                            Ok(default)
-                        } else {
-                            Ok(Value::None)
-                        }
-                    }
-                }
+                default.drop_with_heap(heap);
+                Ok(value)
             }
             Attr::Keys => {
                 args.check_zero_args("dict.keys")?;
-                // keys() now handles refcount incrementing
                 let keys = self.keys(heap);
-                let list_id = heap.allocate(HeapData::List(crate::values::List::new(keys)));
+                let list_id = heap.allocate(HeapData::List(List::new(keys)))?;
                 Ok(Value::Ref(list_id))
             }
             Attr::Values => {
                 args.check_zero_args("dict.values")?;
-                // values() now handles refcount incrementing
-                let values = self.values(heap);
-                let list_id = heap.allocate(HeapData::List(crate::values::List::new(values)));
+                let values = self.values_list(heap);
+                let list_id = heap.allocate(HeapData::List(List::new(values)))?;
                 Ok(Value::Ref(list_id))
             }
             Attr::Items => {
                 args.check_zero_args("dict.items")?;
-                // items() now handles refcount incrementing for the returned values
+                // Return list of tuples
                 let items = self.items(heap);
-                // Convert to list of tuples
-                let mut tuples = Vec::new();
+                let mut tuples: Vec<Value<'c, 'e>> = Vec::with_capacity(items.len());
                 for (k, v) in items {
-                    let tuple_id = heap.allocate(HeapData::Tuple(crate::values::Tuple::from_vec(vec![k, v])));
+                    let tuple_id = heap.allocate(HeapData::Tuple(vec![k, v].into()))?;
                     tuples.push(Value::Ref(tuple_id));
                 }
-                let list_id = heap.allocate(HeapData::List(crate::values::List::new(tuples)));
+                let list_id = heap.allocate(HeapData::List(List::new(tuples)))?;
                 Ok(Value::Ref(list_id))
             }
+            #[allow(clippy::manual_let_else, clippy::single_match_else)]
             Attr::Pop => {
-                let (key, opt_default) = args.get_one_two_args("pop")?;
-                // If key is unhashable, CPython returns the default when provided, else TypeError.
-                if key.py_hash_u64(heap).is_none() {
-                    return if let Some(default) = opt_default {
+                // dict.pop() accepts 1 or 2 arguments (key, optional default)
+                let (key, default) = args.get_one_two_args("pop")?;
+                let result = match self.pop(&key, heap) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // Clean up key and default before returning error
                         key.drop_with_heap(heap);
-                        Ok(default)
-                    } else {
-                        let err = ExcType::type_error_unhashable(key.py_type(heap));
-                        key.drop_with_heap(heap);
-                        Err(err)
-                    };
-                }
-                let pop_result = match self.pop(&key, heap) {
-                    Ok(result) => result,
-                    Err(err) => {
-                        key.drop_with_heap(heap);
-                        if let Some(default) = opt_default {
-                            default.drop_with_heap(heap);
+                        if let Some(d) = default {
+                            d.drop_with_heap(heap);
                         }
-                        return Err(err);
+                        return Err(e);
                     }
                 };
-                match pop_result {
-                    Some((k, v)) => {
-                        // Decrement key refcount since we're not returning it
-                        k.drop_with_heap(heap);
-                        // Clean up the argument key and unused default
-                        key.drop_with_heap(heap);
-                        if let Some(default) = opt_default {
-                            default.drop_with_heap(heap);
-                        }
-                        Ok(v)
+                if let Some((old_key, value)) = result {
+                    // Drop the old key - we don't need it
+                    old_key.drop_with_heap(heap);
+                    // Drop the lookup key and default arguments
+                    key.drop_with_heap(heap);
+                    if let Some(d) = default {
+                        d.drop_with_heap(heap);
                     }
-                    None => {
-                        // Return default if provided (transfer ownership), else KeyError
-                        if let Some(default) = opt_default {
-                            // Clean up the argument key
-                            key.drop_with_heap(heap);
-                            Ok(default)
-                        } else {
-                            // Create error before dropping key (key_error needs to read key's repr)
-                            let err = ExcType::key_error(&key, heap);
-                            key.drop_with_heap(heap);
-                            Err(err)
-                        }
+                    Ok(value)
+                } else {
+                    // No matching key - return default if provided, else KeyError
+                    if let Some(d) = default {
+                        key.drop_with_heap(heap);
+                        Ok(d)
+                    } else {
+                        let err = ExcType::key_error(&key, heap);
+                        key.drop_with_heap(heap);
+                        Err(err)
                     }
                 }
             }
-            // Catch-all for unsupported attributes (including list methods like Append, Insert)
             _ => Err(ExcType::attribute_error("dict", attr)),
         }
     }

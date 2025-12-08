@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use crate::exceptions::{ExceptionRaise, InternalRunError, RunError};
+use crate::resource::ResourceError;
 
 #[derive(Debug, Clone)]
 pub enum ParseError<'c> {
@@ -10,6 +11,7 @@ pub enum ParseError<'c> {
     Internal(Cow<'static, str>),
     PreEvalExc(ExceptionRaise<'c>),
     PreEvalInternal(InternalRunError),
+    PreEvalResource(ResourceError),
 }
 
 impl fmt::Display for ParseError<'_> {
@@ -20,6 +22,7 @@ impl fmt::Display for ParseError<'_> {
             Self::Parsing(s) => write!(f, "Error parsing AST: {s}"),
             Self::PreEvalExc(s) => write!(f, "Pre eval exception: {s}"),
             Self::PreEvalInternal(s) => write!(f, "Pre eval internal error: {s}"),
+            Self::PreEvalResource(s) => write!(f, "Pre eval resource error: {s}"),
         }
     }
 }
@@ -29,6 +32,7 @@ impl<'c> From<RunError<'c>> for ParseError<'c> {
         match run_error {
             RunError::Exc(e) => Self::PreEvalExc(e),
             RunError::Internal(e) => Self::PreEvalInternal(e),
+            RunError::Resource(e) => Self::PreEvalResource(e),
         }
     }
 }
@@ -54,6 +58,7 @@ impl ParseError<'_> {
             Self::Parsing(s) => format!("AST: {s}"),
             Self::PreEvalExc(s) => format!("Exc: {}", s.summary()),
             Self::PreEvalInternal(s) => format!("Eval Internal: {s}"),
+            Self::PreEvalResource(s) => format!("Resource: {s}"),
         }
     }
 }

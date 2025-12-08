@@ -13,6 +13,7 @@ use crate::exceptions::{exc_fmt, ExcType};
 use crate::expressions::ExprLoc;
 use crate::heap::{Heap, HeapData};
 use crate::namespace::Namespaces;
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::Value;
 use crate::values::{PyTrait, Str};
@@ -289,7 +290,7 @@ enum ValueType {
 }
 
 impl ValueType {
-    fn from_value<'c, 'e>(value: &Value<'c, 'e>, heap: &Heap<'c, 'e>) -> Self {
+    fn from_value<'c, 'e, T: ResourceTracker>(value: &Value<'c, 'e>, heap: &Heap<'c, 'e, T>) -> Self {
         match value {
             Value::Int(_) => ValueType::Int,
             Value::Float(_) => ValueType::Float,
@@ -320,10 +321,10 @@ impl ValueType {
 ///
 /// Reference counting: Intermediate string values are heap-allocated and must
 /// be properly dropped after concatenation. The final result is a new heap string.
-pub(crate) fn evaluate_fstring<'c, 'e>(
+pub(crate) fn evaluate_fstring<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     parts: &'e [FStringPart<'c>],
 ) -> RunResult<'c, Value<'c, 'e>> {
     let mut result = String::new();
@@ -382,7 +383,7 @@ pub(crate) fn evaluate_fstring<'c, 'e>(
     }
 
     // Allocate result string on heap
-    let heap_id = heap.allocate(HeapData::Str(Str::new(result)));
+    let heap_id = heap.allocate(HeapData::Str(Str::new(result)))?;
     Ok(Value::Ref(heap_id))
 }
 
@@ -392,7 +393,11 @@ pub(crate) fn evaluate_fstring<'c, 'e>(
 /// - Str (`!s`): Explicitly uses `py_str()`
 /// - Repr (`!r`): Uses `py_repr()` for debugging representation
 /// - Ascii (`!a`): Uses `py_repr()` and escapes non-ASCII characters
-fn apply_conversion<'c, 'e>(value: &Value<'c, 'e>, conversion: ConversionFlag, heap: &Heap<'c, 'e>) -> String {
+fn apply_conversion<'c, 'e, T: ResourceTracker>(
+    value: &Value<'c, 'e>,
+    conversion: ConversionFlag,
+    heap: &Heap<'c, 'e, T>,
+) -> String {
     match conversion {
         ConversionFlag::None | ConversionFlag::Str => value.py_str(heap).into_owned(),
         ConversionFlag::Repr => value.py_repr(heap).into_owned(),
@@ -408,10 +413,10 @@ fn apply_conversion<'c, 'e>(value: &Value<'c, 'e>, conversion: ConversionFlag, h
 ///
 /// Evaluates each part and concatenates the results into a format spec string,
 /// which is then parsed into a `ParsedFormatSpec` at runtime.
-fn evaluate_dynamic_format_spec<'c, 'e>(
+fn evaluate_dynamic_format_spec<'c, 'e, T: ResourceTracker>(
     namespaces: &mut Namespaces<'c, 'e>,
     local_idx: usize,
-    heap: &mut Heap<'c, 'e>,
+    heap: &mut Heap<'c, 'e, T>,
     parts: &'e [FStringPart<'c>],
 ) -> RunResult<'c, String> {
     let mut result = String::new();

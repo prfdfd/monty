@@ -6,6 +6,7 @@ use crate::{
     expressions::{FrameExit, Identifier, Node},
     heap::{Heap, HeapId},
     namespace::Namespaces,
+    resource::ResourceTracker,
     run::{RunFrame, RunResult},
     value::{heap_tagged_id, Value},
     values::str::string_repr,
@@ -106,10 +107,10 @@ impl<'c> Function<'c> {
     /// * `namespaces` - The namespace storage for managing all namespaces
     /// * `heap` - The heap for allocating objects
     /// * `args` - The arguments to pass to the function
-    pub fn call<'e>(
+    pub fn call<'e, T: ResourceTracker>(
         &'e self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>>
     where
@@ -166,10 +167,10 @@ impl<'c> Function<'c> {
     ///
     /// This method is called when invoking a `Value::Closure`. The captured_cells
     /// are pushed sequentially after cell_vars in the namespace.
-    pub fn call_with_cells<'e>(
+    pub fn call_with_cells<'e, T: ResourceTracker>(
         &'e self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         args: ArgValues<'c, 'e>,
         captured_cells: &[HeapId],
     ) -> RunResult<'c, Value<'c, 'e>>

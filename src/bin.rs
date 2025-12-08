@@ -29,7 +29,7 @@ fn main() -> ExitCode {
     };
 
     let tic = Instant::now();
-    let r = ex.run(inputs);
+    let r = ex.run_no_limits(inputs);
     let toc = Instant::now();
     eprintln!("Elapsed time: {:?}\n", toc - tic);
     match r {

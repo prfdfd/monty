@@ -203,7 +203,7 @@ fn run_test(path: &Path, code: &str, expectation: Expectation) {
 
     match Executor::new(code, "test.py", &[]) {
         Ok(ex) => {
-            let result = ex.run(vec![]);
+            let result = ex.run_no_limits(vec![]);
             match result {
                 Ok(obj) => match expectation {
                     Expectation::ReturnStr(expected) => {
@@ -233,6 +233,7 @@ fn run_test(path: &Path, code: &str, expectation: Expectation) {
                         let output = match &e {
                             RunError::Exc(exc) => exc.exc.to_string(),
                             RunError::Internal(internal) => internal.to_string(),
+                            RunError::Resource(res) => res.to_string(),
                         };
                         assert_eq!(output, expected, "[{test_name}] Exception mismatch");
                     } else {

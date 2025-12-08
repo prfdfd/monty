@@ -13,6 +13,7 @@ mod operators;
 mod parse;
 mod parse_error;
 mod prepare;
+mod resource;
 mod run;
 mod value;
 mod values;
@@ -29,6 +30,8 @@ pub use crate::object::{InvalidInputError, PyObject};
 use crate::parse::parse;
 pub use crate::parse_error::ParseError;
 use crate::prepare::prepare;
+use crate::resource::NoLimitTracker;
+pub use crate::resource::{LimitedTracker, ResourceLimits, ResourceTracker};
 use crate::run::RunFrame;
 use crate::value::Value;
 
@@ -64,12 +67,57 @@ impl<'c> Executor<'c> {
     /// Executes the code with the given input values.
     ///
     /// The heap is created fresh for each run, ensuring no state leaks between
-    /// executions.
+    /// executions. No resource limits are enforced during execution.
     ///
     /// # Arguments
     /// * `inputs` - Values to fill the first N slots of the namespace (e.g., function parameters)
-    pub fn run(&self, inputs: Vec<PyObject>) -> Result<PyObject, RunError<'c>> {
-        let mut heap = Heap::new(self.namespace_size);
+    pub fn run_no_limits(&self, inputs: Vec<PyObject>) -> Result<PyObject, RunError<'c>> {
+        self.run_with_tracker(inputs, NoLimitTracker::default())
+    }
+
+    /// Executes the code with configurable resource limits.
+    ///
+    /// This is a convenience method that creates a `LimitedTracker` from the given
+    /// limits. For more control, use `run_with_tracker` directly.
+    ///
+    /// # Arguments
+    /// * `inputs` - Values to fill the first N slots of the namespace
+    /// * `limits` - Resource limits to enforce during execution
+    ///
+    /// # Example
+    /// ```
+    /// use std::time::Duration;
+    /// use monty::{Executor, ResourceLimits};
+    ///
+    /// let limits = ResourceLimits::new()
+    ///     .max_allocations(1000)
+    ///     .max_duration(Duration::from_secs(5));
+    /// let ex = Executor::new("1 + 2", "test.py", &[]).unwrap();
+    /// let result = ex.run_with_limits(vec![], limits);
+    /// ```
+    pub fn run_with_limits(&self, inputs: Vec<PyObject>, limits: ResourceLimits) -> Result<PyObject, RunError<'c>> {
+        let tracker = LimitedTracker::new(limits);
+        self.run_with_tracker(inputs, tracker)
+    }
+
+    /// Executes the code with a custom resource tracker.
+    ///
+    /// This provides full control over resource tracking and garbage collection
+    /// scheduling. The tracker is called on each allocation and periodically
+    /// during execution to check time limits and trigger GC.
+    ///
+    /// # Arguments
+    /// * `inputs` - Values to fill the first N slots of the namespace
+    /// * `tracker` - Custom resource tracker implementation
+    ///
+    /// # Type Parameters
+    /// * `T` - A type implementing `ResourceTracker`
+    fn run_with_tracker<T: ResourceTracker>(
+        &self,
+        inputs: Vec<PyObject>,
+        tracker: T,
+    ) -> Result<PyObject, RunError<'c>> {
+        let mut heap = Heap::new(self.namespace_size, tracker);
         let mut namespaces = self.prepare_namespaces(inputs, &mut heap)?;
 
         let frame = RunFrame::new();
@@ -100,7 +148,7 @@ impl<'c> Executor<'c> {
         use crate::value::Value;
         use std::collections::HashSet;
 
-        let mut heap = Heap::new(self.namespace_size);
+        let mut heap = Heap::new(self.namespace_size, NoLimitTracker::default());
         let mut namespaces = self.prepare_namespaces(inputs, &mut heap)?;
 
         let frame = RunFrame::new();
@@ -133,10 +181,10 @@ impl<'c> Executor<'c> {
     ///
     /// Converts each `PyObject` input to a `Value`, allocating on the heap if needed.
     /// Returns the prepared Namespaces or an error if there are too many inputs or invalid input types.
-    fn prepare_namespaces<'e>(
+    fn prepare_namespaces<'e, T: ResourceTracker>(
         &self,
         inputs: Vec<PyObject>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
     ) -> Result<Namespaces<'c, 'e>, InternalRunError> {
         let Some(extra) = self.namespace_size.checked_sub(inputs.len()) else {
             return Err(InternalRunError::Error(

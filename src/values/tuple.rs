@@ -5,11 +5,11 @@
 /// reference counting for heap-allocated values.
 use std::borrow::Cow;
 
-use crate::args::ArgValues;
 use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
-use crate::value::{Attr, Value};
+use crate::value::Value;
 use crate::values::list::repr_sequence;
 use crate::values::PyTrait;
 
@@ -47,7 +47,7 @@ impl<'c, 'e> Tuple<'c, 'e> {
     /// incremented. This should be used instead of `.clone()` which would
     /// bypass reference counting.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+    pub fn clone_with_heap<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Self {
         let cloned: Vec<Value<'c, 'e>> = self.0.iter().map(|obj| obj.clone_with_heap(heap)).collect();
         Self(cloned)
     }
@@ -72,19 +72,27 @@ impl<'c, 'e> From<Tuple<'c, 'e>> for Vec<Value<'c, 'e>> {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for Tuple<'c, 'e> {
-    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, _heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         "tuple"
     }
 
-    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
+    fn py_estimate_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.0.len() * std::mem::size_of::<Value>()
+    }
+
+    fn py_len<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_getitem(&self, key: &Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'static, Value<'c, 'e>> {
+    fn py_getitem<T: ResourceTracker>(
+        &self,
+        key: &Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'static, Value<'c, 'e>> {
         // Extract integer index from key, returning TypeError if not an int
         let index = match key {
             Value::Int(i) => *i,
-            _ => return Err(ExcType::type_error_indices("tuple", key.py_type(heap))),
+            _ => return Err(ExcType::type_error_indices("tuple", key.py_type(Some(heap)))),
         };
 
         // Convert to usize, handling negative indices (Python-style: -1 = last element)
@@ -100,7 +108,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Tuple<'c, 'e> {
         Ok(self.0[normalized_index as usize].clone_with_heap(heap))
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> bool {
         if self.0.len() != other.0.len() {
             return false;
         }
@@ -126,21 +134,13 @@ impl<'c, 'e> PyTrait<'c, 'e> for Tuple<'c, 'e> {
         }
     }
 
-    /// Tuples don't support attribute calls.
-    fn py_call_attr(
-        &mut self,
-        heap: &mut Heap<'c, 'e>,
-        attr: &Attr,
-        _args: ArgValues<'c, 'e>,
-    ) -> RunResult<'c, Value<'c, 'e>> {
-        Err(ExcType::attribute_error(self.py_type(heap), attr))
-    }
+    // py_call_attr uses default implementation which returns AttributeError
 
-    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         Cow::Owned(repr_sequence('(', ')', &self.0, heap))
     }
 }

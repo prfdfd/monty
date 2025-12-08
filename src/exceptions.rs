@@ -11,6 +11,7 @@ use crate::expressions::ExprLoc;
 use crate::heap::HeapData;
 use crate::operators::{CmpOperator, Operator};
 use crate::parse::CodeRange;
+use crate::resource::{ResourceError, ResourceTracker};
 use crate::run::RunResult;
 use crate::value::{Attr, Value};
 use crate::values::str::string_repr;
@@ -39,7 +40,11 @@ impl ExcType {
     ///
     /// Handles exception constructors like `ValueError('message')`.
     /// Currently supports zero or one string argument.
-    pub(crate) fn call<'c, 'e>(self, heap: &mut Heap<'c, 'e>, args: ArgValues<'c, 'e>) -> RunResult<'c, Value<'c, 'e>> {
+    pub(crate) fn call<'c, 'e, T: ResourceTracker>(
+        self,
+        heap: &mut Heap<'c, 'e, T>,
+        args: ArgValues<'c, 'e>,
+    ) -> RunResult<'c, Value<'c, 'e>> {
         match args {
             ArgValues::Zero => Ok(Value::Exc(SimpleException::new(self, None))),
             ArgValues::One(Value::InternString(s)) => {
@@ -92,7 +97,7 @@ impl ExcType {
     /// For string keys, uses the raw string value without extra quoting.
     /// For other types, uses repr.
     #[must_use]
-    pub fn key_error(key: &Value<'_, '_>, heap: &Heap<'_, '_>) -> RunError<'static> {
+    pub fn key_error<T: ResourceTracker>(key: &Value<'_, '_>, heap: &Heap<'_, '_, T>) -> RunError<'static> {
         let key_str = match key {
             Value::InternString(s) => (*s).to_owned(),
             Value::Ref(id) => {
@@ -527,6 +532,8 @@ impl fmt::Display for InternalRunError {
 pub enum RunError<'c> {
     Internal(InternalRunError),
     Exc(ExceptionRaise<'c>),
+    /// Resource limit exceeded (allocation, time, or memory).
+    Resource(ResourceError),
 }
 
 impl fmt::Display for RunError<'_> {
@@ -534,6 +541,7 @@ impl fmt::Display for RunError<'_> {
         match self {
             Self::Internal(s) => write!(f, "{s}"),
             Self::Exc(s) => write!(f, "{s}"),
+            Self::Resource(r) => write!(f, "ResourceError: {r}"),
         }
     }
 }
@@ -553,5 +561,11 @@ impl<'c> From<ExceptionRaise<'c>> for RunError<'c> {
 impl<'c> From<SimpleException<'c>> for RunError<'c> {
     fn from(exc: SimpleException<'c>) -> Self {
         Self::Exc(exc.into())
+    }
+}
+
+impl From<ResourceError> for RunError<'_> {
+    fn from(err: ResourceError) -> Self {
+        Self::Resource(err)
     }
 }

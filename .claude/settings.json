@@ -17,6 +17,7 @@
       "Bash(python3:*)",
       "Bash(git show:*)",
       "Bash(git diff:*)",
+      "Bash(git add:*)",
       "Bash(gh pr view:*)",
       "Bash(gh api:*)"
     ],

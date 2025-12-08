@@ -11,6 +11,7 @@ use crate::exceptions::{exc_err_fmt, ExcType, SimpleException};
 use crate::function::Function;
 use crate::heap::HeapData;
 use crate::heap::{Heap, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::values::bytes::bytes_repr;
 use crate::values::str::string_repr;
@@ -83,7 +84,7 @@ impl From<bool> for Value<'_, '_> {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
-    fn py_type(&self, heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         match self {
             Self::Undefined => "undefined",
             Self::Ellipsis => "ellipsis",
@@ -95,15 +96,27 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
             Self::InternString(_) => "str",
             Self::InternBytes(_) => "bytes",
             Self::Exc(e) => e.type_str(),
-            Self::Callable(c) => c.py_type(heap),
+            Self::Callable(c) => c.py_type(),
             Self::Function(_) | Self::Closure(_, _) => "function",
-            Self::Ref(id) => heap.get(*id).py_type(heap),
+            Self::Ref(id) => match heap {
+                Some(heap) => heap.get(*id).py_type(Some(heap)),
+                None => "object",
+            },
             #[cfg(feature = "dec-ref-check")]
             Self::Dereferenced => panic!("Cannot access Dereferenced object"),
         }
     }
 
-    fn py_len(&self, heap: &Heap<'c, 'e>) -> Option<usize> {
+    /// Returns 0 for Value since immediate values are stack-allocated.
+    ///
+    /// Heap-allocated values (Ref variants) have their size tracked when
+    /// the HeapData is allocated, not here.
+    fn py_estimate_size(&self) -> usize {
+        // Value is stack-allocated; heap data is sized separately when allocated
+        0
+    }
+
+    fn py_len<T: ResourceTracker>(&self, heap: &Heap<'c, 'e, T>) -> Option<usize> {
         match self {
             // Count Unicode characters, not bytes, to match Python semantics
             Self::InternString(s) => Some(s.chars().count()),
@@ -113,7 +126,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> bool {
         match (self, other) {
             (Self::Undefined, _) => false,
             (_, Self::Undefined) => false,
@@ -170,7 +183,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
     }
 
     #[allow(clippy::only_used_in_recursion)]
-    fn py_cmp(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Ordering> {
+    fn py_cmp<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> Option<Ordering> {
         match (self, other) {
             (Self::Int(s), Self::Int(o)) => s.partial_cmp(o),
             (Self::Float(s), Self::Float(o)) => s.partial_cmp(o),
@@ -195,7 +208,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_bool(&self, heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, heap: &Heap<'c, 'e, T>) -> bool {
         match self {
             Self::Undefined => false,
             Self::Ellipsis => true,
@@ -215,7 +228,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_repr<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         match self {
             Self::Undefined => "Undefined".into(),
             Self::Ellipsis => "Ellipsis".into(),
@@ -243,7 +256,7 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_str<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_str<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         match self {
             Self::InternString(s) => (*s).into(),
             Self::Ref(id) => heap.get(*id).py_str(heap),
@@ -251,30 +264,34 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Value<'c, 'e>> {
+    fn py_add<T: ResourceTracker>(
+        &self,
+        other: &Self,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Value<'c, 'e>>, crate::resource::ResourceError> {
         match (self, other) {
-            (Self::Int(v1), Self::Int(v2)) => Some(Value::Int(v1 + v2)),
-            (Self::Float(v1), Self::Float(v2)) => Some(Value::Float(v1 + v2)),
+            (Self::Int(v1), Self::Int(v2)) => Ok(Some(Value::Int(v1 + v2))),
+            (Self::Float(v1), Self::Float(v2)) => Ok(Some(Value::Float(v1 + v2))),
             (Self::Ref(id1), Self::Ref(id2)) => heap.with_two(*id1, *id2, |heap, left, right| left.py_add(right, heap)),
             (Self::InternString(s1), Self::InternString(s2)) => {
                 let concat = format!("{s1}{s2}");
-                Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))))
+                Ok(Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))?)))
             }
             // for strings we need to account for the fact they might be either interned or not
             (Self::InternString(s1), Self::Ref(id2)) => {
                 if let HeapData::Str(s2) = heap.get(*id2) {
                     let concat = format!("{}{}", s1, s2.as_str());
-                    Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))))
+                    Ok(Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))?)))
                 } else {
-                    None
+                    Ok(None)
                 }
             }
             (Self::Ref(id1), Self::InternString(s2)) => {
                 if let HeapData::Str(s1) = heap.get(*id1) {
                     let concat = format!("{}{}", s1.as_str(), s2);
-                    Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))))
+                    Ok(Some(Value::Ref(heap.allocate(HeapData::Str(concat.into()))?)))
                 } else {
-                    None
+                    Ok(None)
                 }
             }
             // same for bytes
@@ -282,16 +299,16 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
                 let mut b = Vec::with_capacity(b1.len() + b2.len());
                 b.extend_from_slice(b1);
                 b.extend_from_slice(b2);
-                Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))))
+                Ok(Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))?)))
             }
             (Self::InternBytes(b1), Self::Ref(id2)) => {
                 if let HeapData::Bytes(b2) = heap.get(*id2) {
                     let mut b = Vec::with_capacity(b1.len() + b2.len());
                     b.extend_from_slice(b1);
                     b.extend_from_slice(b2);
-                    Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))))
+                    Ok(Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))?)))
                 } else {
-                    None
+                    Ok(None)
                 }
             }
             (Self::Ref(id1), Self::InternBytes(b2)) => {
@@ -299,19 +316,23 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
                     let mut b = Vec::with_capacity(b1.len() + b2.len());
                     b.extend_from_slice(b1);
                     b.extend_from_slice(b2);
-                    Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))))
+                    Ok(Some(Value::Ref(heap.allocate(HeapData::Bytes(b.into()))?)))
                 } else {
-                    None
+                    Ok(None)
                 }
             }
-            _ => None,
+            _ => Ok(None),
         }
     }
 
-    fn py_sub(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Self> {
+    fn py_sub<T: ResourceTracker>(
+        &self,
+        other: &Self,
+        _heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Self>, crate::resource::ResourceError> {
         match (self, other) {
-            (Self::Int(v1), Self::Int(v2)) => Some(Value::Int(v1 - v2)),
-            _ => None,
+            (Self::Int(v1), Self::Int(v2)) => Ok(Some(Value::Int(v1 - v2))),
+            _ => Ok(None),
         }
     }
 
@@ -335,36 +356,41 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
         }
     }
 
-    fn py_iadd(&mut self, other: Self, heap: &mut Heap<'c, 'e>, _self_id: Option<HeapId>) -> bool {
+    fn py_iadd<T: ResourceTracker>(
+        &mut self,
+        other: Self,
+        heap: &mut Heap<'c, 'e, T>,
+        _self_id: Option<HeapId>,
+    ) -> Result<bool, crate::resource::ResourceError> {
         match (&self, &other) {
             (Self::Int(v1), Self::Int(v2)) => {
                 *self = Value::Int(*v1 + v2);
-                true
+                Ok(true)
             }
             (Self::Float(v1), Self::Float(v2)) => {
                 *self = Value::Float(*v1 + *v2);
-                true
+                Ok(true)
             }
             (Self::InternString(s1), Self::InternString(s2)) => {
                 let concat = format!("{s1}{s2}");
-                *self = Value::Ref(heap.allocate(HeapData::Str(concat.into())));
-                true
+                *self = Value::Ref(heap.allocate(HeapData::Str(concat.into()))?);
+                Ok(true)
             }
             (Self::InternString(s1), Self::Ref(id2)) => {
                 if let HeapData::Str(s2) = heap.get(*id2) {
                     let concat = format!("{}{}", s1, s2.as_str());
-                    *self = Value::Ref(heap.allocate(HeapData::Str(concat.into())));
-                    true
+                    *self = Value::Ref(heap.allocate(HeapData::Str(concat.into()))?);
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             (Self::Ref(id1), Self::InternString(s2)) => {
                 if let HeapData::Str(s1) = heap.get_mut(*id1) {
                     s1.as_string_mut().push_str(s2);
-                    true
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             // same for bytes
@@ -372,43 +398,43 @@ impl<'c, 'e> PyTrait<'c, 'e> for Value<'c, 'e> {
                 let mut b = Vec::with_capacity(b1.len() + b2.len());
                 b.extend_from_slice(b1);
                 b.extend_from_slice(b2);
-                *self = Value::Ref(heap.allocate(HeapData::Bytes(b.into())));
-                true
+                *self = Value::Ref(heap.allocate(HeapData::Bytes(b.into()))?);
+                Ok(true)
             }
             (Self::InternBytes(b1), Self::Ref(id2)) => {
                 if let HeapData::Bytes(b2) = heap.get(*id2) {
                     let mut b = Vec::with_capacity(b1.len() + b2.len());
                     b.extend_from_slice(b1);
                     b.extend_from_slice(b2);
-                    *self = Value::Ref(heap.allocate(HeapData::Bytes(b.into())));
-                    true
+                    *self = Value::Ref(heap.allocate(HeapData::Bytes(b.into()))?);
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             (Self::Ref(id1), Self::InternBytes(b2)) => {
                 if let HeapData::Bytes(b1) = heap.get_mut(*id1) {
                     b1.as_vec_mut().extend_from_slice(b2);
-                    true
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
             (Self::Ref(id), Self::Ref(_)) => {
                 heap.with_entry_mut(*id, |heap, data| data.py_iadd(other, heap, Some(*id)))
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
 
-    fn py_getitem(&self, key: &Self, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Self> {
+    fn py_getitem<T: ResourceTracker>(&self, key: &Self, heap: &mut Heap<'c, 'e, T>) -> RunResult<'c, Self> {
         match self {
             Value::Ref(id) => {
                 // Need to take entry out to allow mutable heap access
                 let id = *id;
                 heap.with_entry_mut(id, |heap, data| data.py_getitem(key, heap))
             }
-            _ => Err(ExcType::type_error_not_sub(self.py_type(heap))),
+            _ => Err(ExcType::type_error_not_sub(self.py_type(Some(heap)))),
         }
     }
 
@@ -479,7 +505,7 @@ impl<'c, 'e> Value<'c, 'e> {
     ///
     /// For heap-allocated values (Ref variant), this computes the hash lazily
     /// on first use and caches it for subsequent calls.
-    pub fn py_hash_u64(&self, heap: &mut Heap<'c, 'e>) -> Option<u64> {
+    pub fn py_hash_u64<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Option<u64> {
         match self {
             // Immediate values can be hashed directly
             Self::Undefined => Some(0),
@@ -553,16 +579,16 @@ impl<'c, 'e> Value<'c, 'e> {
     ///
     /// This method requires heap access to work with heap-allocated values and
     /// to generate accurate error messages.
-    pub fn call_attr(
+    pub fn call_attr<T: ResourceTracker>(
         &mut self,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         attr: &Attr,
         args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>> {
         if let Self::Ref(id) = self {
             heap.call_attr(*id, attr, args)
         } else {
-            Err(ExcType::attribute_error(self.py_type(heap), attr))
+            Err(ExcType::attribute_error(self.py_type(Some(heap)), attr))
         }
     }
 
@@ -577,7 +603,7 @@ impl<'c, 'e> Value<'c, 'e> {
     /// proper reference counting. Using `.clone()` directly will bypass reference counting
     /// and cause memory leaks or double-frees.
     #[must_use]
-    pub fn clone_with_heap(&self, heap: &mut Heap<'c, 'e>) -> Self {
+    pub fn clone_with_heap<T: ResourceTracker>(&self, heap: &mut Heap<'c, 'e, T>) -> Self {
         match self {
             Self::Ref(id) => {
                 heap.inc_ref(*id);
@@ -611,7 +637,7 @@ impl<'c, 'e> Value<'c, 'e> {
     /// the original is forgotten to prevent the Drop impl from panicking. Non-Ref variants
     /// are left unchanged since they don't trigger the Drop panic.
     #[allow(unused_mut)]
-    pub fn drop_with_heap(mut self, heap: &mut Heap<'c, 'e>) {
+    pub fn drop_with_heap<T: ResourceTracker>(mut self, heap: &mut Heap<'c, 'e, T>) {
         #[cfg(feature = "dec-ref-check")]
         {
             let old = std::mem::replace(&mut self, Value::Dereferenced);

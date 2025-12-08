@@ -8,6 +8,7 @@ use crate::{
     expressions::Identifier,
     heap::Heap,
     namespace::Namespaces,
+    resource::ResourceTracker,
     run::RunResult,
     value::Value,
     values::PyTrait,
@@ -52,11 +53,11 @@ impl<'c> Callable<'c> {
     /// * `local_idx` - Index of the local namespace in namespaces
     /// * `heap` - The heap for allocating objects
     /// * `args` - The arguments to pass to the callable
-    pub fn call<'e>(
+    pub fn call<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
         local_idx: usize,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>> {
         match self {
@@ -79,7 +80,7 @@ impl<'c> Callable<'c> {
                         f.call_with_cells(namespaces, heap, args, &cells)
                     }
                     _ => {
-                        let type_name = callable_obj.py_type(heap);
+                        let type_name = callable_obj.py_type(Some(heap));
                         let err = exc_fmt!(ExcType::TypeError; "'{type_name}' object is not callable");
                         Err(err.with_position(ident.position).into())
                     }
@@ -92,7 +93,7 @@ impl<'c> Callable<'c> {
         Value::Callable(self.clone())
     }
 
-    pub fn py_repr<'a, 'e>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    pub fn py_repr<'a, 'e, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         match self {
             Self::Builtin(b) => format!("<built-in function {}>", b.as_ref()).into(),
             Self::ExcType(e) => format!("<class '{}'>", <&'static str>::from(*e)).into(),
@@ -100,7 +101,7 @@ impl<'c> Callable<'c> {
         }
     }
 
-    pub fn py_type(&self, _heap: &Heap<'c, '_>) -> &'static str {
+    pub fn py_type(&self) -> &'static str {
         match self {
             Self::Builtin(_) => "builtin_function_or_method",
             Self::ExcType(_) => "type",

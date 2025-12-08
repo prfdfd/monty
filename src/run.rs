@@ -9,6 +9,7 @@ use crate::heap::Heap;
 use crate::namespace::{Namespaces, GLOBAL_NS_IDX};
 use crate::operators::Operator;
 use crate::parse::CodeRange;
+use crate::resource::ResourceTracker;
 use crate::value::Value;
 use crate::values::PyTrait;
 
@@ -71,16 +72,30 @@ impl<'c> RunFrame<'c> {
         }
     }
 
-    pub fn execute<'e>(
+    pub fn execute<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         nodes: &'e [Node<'c>],
     ) -> RunResult<'c, FrameExit<'c, 'e>>
     where
         'c: 'e,
     {
         for node in nodes {
+            // Check time limit at statement boundaries
+            heap.tracker().check_time()?;
+
+            // Trigger garbage collection if scheduler says it's time.
+            // GC runs at statement boundaries because:
+            // 1. This is a natural pause point where we have access to GC roots
+            // 2. The namespace state is stable (not mid-expression evaluation)
+            // Note: GC won't run during long-running single expressions (e.g., large list
+            // comprehensions). This is acceptable because most Python code is structured
+            // as multiple statements, and resource limits (time, memory) still apply.
+            if heap.tracker().should_gc() {
+                heap.collect_garbage(|| namespaces.iter_heap_ids());
+            }
+
             if let Some(leave) = self.execute_node(namespaces, heap, node)? {
                 return Ok(leave);
             }
@@ -88,10 +103,10 @@ impl<'c> RunFrame<'c> {
         Ok(FrameExit::Return(Value::None))
     }
 
-    fn execute_node<'e>(
+    fn execute_node<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         node: &'e Node<'c>,
     ) -> RunResult<'c, Option<FrameExit<'c, 'e>>>
     where
@@ -125,10 +140,10 @@ impl<'c> RunFrame<'c> {
         Ok(None)
     }
 
-    fn execute_expr<'e>(
+    fn execute_expr<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         expr: &'e ExprLoc<'c>,
     ) -> RunResult<'c, Value<'c, 'e>>
     where
@@ -143,10 +158,10 @@ impl<'c> RunFrame<'c> {
         }
     }
 
-    fn execute_expr_bool<'e>(
+    fn execute_expr_bool<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         expr: &'e ExprLoc<'c>,
     ) -> RunResult<'c, bool>
     where
@@ -167,10 +182,10 @@ impl<'c> RunFrame<'c> {
     /// * Exception instance (Value::Exc) - raise directly
     /// * Exception type (Value::Callable with ExcType) - instantiate then raise
     /// * Anything else - TypeError
-    fn raise<'e>(
+    fn raise<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         op_exc_expr: Option<&'e ExprLoc<'c>>,
     ) -> RunResult<'c, ()>
     where
@@ -206,10 +221,10 @@ impl<'c> RunFrame<'c> {
     /// `AssertionError` if the test is falsy.
     ///
     /// If a message expression is provided, it is evaluated and used as the exception message.
-    fn assert_<'e>(
+    fn assert_<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         test: &'e ExprLoc<'c>,
         msg: Option<&'e ExprLoc<'c>>,
     ) -> RunResult<'c, ()>
@@ -234,10 +249,10 @@ impl<'c> RunFrame<'c> {
         Ok(())
     }
 
-    fn assign<'e>(
+    fn assign<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         target: &'e Identifier<'c>,
         expr: &'e ExprLoc<'c>,
     ) -> RunResult<'c, ()>
@@ -268,10 +283,10 @@ impl<'c> RunFrame<'c> {
         Ok(())
     }
 
-    fn op_assign<'e>(
+    fn op_assign<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         target: &Identifier<'c>,
         op: &Operator,
         expr: &'e ExprLoc<'c>,
@@ -281,7 +296,7 @@ impl<'c> RunFrame<'c> {
     {
         let rhs = self.execute_expr(namespaces, heap, expr)?;
         // Capture rhs type before it's consumed by py_iadd
-        let rhs_type = rhs.py_type(heap);
+        let rhs_type = rhs.py_type(Some(heap));
 
         // Cell variables need special handling - read through cell, modify, write back
         let err_target_type = if target.scope == NameScope::Cell {
@@ -291,26 +306,26 @@ impl<'c> RunFrame<'c> {
             };
             let mut cell_value = heap.get_cell_value(cell_id);
             let ok = match op {
-                Operator::Add => cell_value.py_iadd(rhs, heap, None),
+                Operator::Add => cell_value.py_iadd(rhs, heap, None)?,
                 _ => return internal_err!(InternalRunError::TodoError; "Assign operator {op:?} not yet implemented"),
             };
             if ok {
                 heap.set_cell_value(cell_id, cell_value);
                 None
             } else {
-                Some(cell_value.py_type(heap))
+                Some(cell_value.py_type(Some(heap)))
             }
         } else {
             // Direct access for Local/Global scopes
             let target_val = namespaces.get_var_mut(self.local_idx, target)?;
             let ok = match op {
-                Operator::Add => target_val.py_iadd(rhs, heap, None),
+                Operator::Add => target_val.py_iadd(rhs, heap, None)?,
                 _ => return internal_err!(InternalRunError::TodoError; "Assign operator {op:?} not yet implemented"),
             };
             if ok {
                 None
             } else {
-                Some(target_val.py_type(heap))
+                Some(target_val.py_type(Some(heap)))
             }
         };
 
@@ -322,10 +337,10 @@ impl<'c> RunFrame<'c> {
         }
     }
 
-    fn subscript_assign<'e>(
+    fn subscript_assign<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         target: &Identifier<'c>,
         index: &'e ExprLoc<'c>,
         value: &'e ExprLoc<'c>,
@@ -340,16 +355,15 @@ impl<'c> RunFrame<'c> {
             let id = *id;
             heap.with_entry_mut(id, |heap, data| data.py_setitem(key, val, heap))
         } else {
-            let e =
-                exc_fmt!(ExcType::TypeError; "'{}' object does not support item assignment", target_val.py_type(heap));
+            let e = exc_fmt!(ExcType::TypeError; "'{}' object does not support item assignment", target_val.py_type(Some(heap)));
             Err(e.with_frame(self.stack_frame(&index.position)).into())
         }
     }
 
-    fn for_loop<'e>(
+    fn for_loop<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         target: &Identifier,
         iter: &'e ExprLoc<'c>,
         body: &'e [Node<'c>],
@@ -371,10 +385,10 @@ impl<'c> RunFrame<'c> {
         Ok(())
     }
 
-    fn if_<'e>(
+    fn if_<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         test: &'e ExprLoc<'c>,
         body: &'e [Node<'c>],
         or_else: &'e [Node<'c>],
@@ -401,10 +415,10 @@ impl<'c> RunFrame<'c> {
     /// Closures share cells with their enclosing scope. The cell HeapIds are
     /// looked up from the enclosing namespace slots specified in free_var_enclosing_slots.
     /// This ensures modifications through `nonlocal` are visible to both scopes.
-    fn define_function<'e>(
+    fn define_function<'e, T: ResourceTracker>(
         &self,
         namespaces: &mut Namespaces<'c, 'e>,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         function: &'e Function<'c>,
     ) where
         'c: 'e,

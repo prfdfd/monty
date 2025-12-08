@@ -4,11 +4,9 @@
 /// operations like length and equality comparison.
 use std::borrow::Cow;
 
-use crate::args::ArgValues;
-use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapData, HeapId};
-use crate::run::RunResult;
-use crate::value::{Attr, Value};
+use crate::resource::ResourceTracker;
+use crate::value::Value;
 use crate::values::PyTrait;
 
 /// Python string value stored on the heap.
@@ -64,16 +62,20 @@ impl std::ops::Deref for Str {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for Str {
-    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, _heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         "str"
     }
 
-    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
+    fn py_estimate_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.0.len()
+    }
+
+    fn py_len<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> Option<usize> {
         // Count Unicode characters, not bytes, to match Python semantics
         Some(self.0.chars().count())
     }
 
-    fn py_eq(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, _heap: &mut Heap<'c, 'e, T>) -> bool {
         self.0 == other.0
     }
 
@@ -82,50 +84,51 @@ impl<'c, 'e> PyTrait<'c, 'e> for Str {
         // No-op: strings don't hold Value references
     }
 
-    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, _heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         Cow::Owned(string_repr(&self.0))
     }
 
-    fn py_str<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_str<'a, T: ResourceTracker>(&'a self, _heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         self.0.as_str().into()
     }
 
-    fn py_add(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> Option<Value<'c, 'e>> {
+    fn py_add<T: ResourceTracker>(
+        &self,
+        other: &Self,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Value<'c, 'e>>, crate::resource::ResourceError> {
         let result = format!("{}{}", self.0, other.0);
-        let id = heap.allocate(HeapData::Str(result.into()));
-        Some(Value::Ref(id))
+        let id = heap.allocate(HeapData::Str(result.into()))?;
+        Ok(Some(Value::Ref(id)))
     }
 
-    fn py_iadd(&mut self, other: Value<'c, 'e>, heap: &mut Heap<'c, 'e>, self_id: Option<HeapId>) -> bool {
+    fn py_iadd<T: ResourceTracker>(
+        &mut self,
+        other: Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+        self_id: Option<HeapId>,
+    ) -> Result<bool, crate::resource::ResourceError> {
         match other {
             Value::Ref(other_id) => {
                 if Some(other_id) == self_id {
                     let rhs = self.0.clone();
                     self.0.push_str(&rhs);
-                    true
+                    Ok(true)
                 } else if let HeapData::Str(rhs) = heap.get(other_id) {
                     self.0.push_str(rhs.as_str());
-                    true
+                    Ok(true)
                 } else {
-                    false
+                    Ok(false)
                 }
             }
-            _ => false,
+            _ => Ok(false),
         }
     }
-
-    fn py_call_attr(
-        &mut self,
-        heap: &mut Heap<'c, 'e>,
-        attr: &Attr,
-        _args: ArgValues<'c, 'e>,
-    ) -> RunResult<'c, Value<'c, 'e>> {
-        Err(ExcType::attribute_error(self.py_type(heap), attr))
-    }
+    // py_call_attr uses default implementation which returns AttributeError
 }
 
 /// Macro for common string escape replacements used in repr formatting.

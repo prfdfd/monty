@@ -5,11 +5,8 @@
 use std::borrow::Cow;
 use std::fmt::Write;
 
-use crate::args::ArgValues;
-use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapId};
-use crate::run::RunResult;
-use crate::value::{Attr, Value};
+use crate::resource::ResourceTracker;
 use crate::values::PyTrait;
 
 /// Python bytes value stored on the heap.
@@ -64,15 +61,19 @@ impl std::ops::Deref for Bytes {
 }
 
 impl<'c, 'e> PyTrait<'c, 'e> for Bytes {
-    fn py_type(&self, _heap: &Heap<'c, 'e>) -> &'static str {
+    fn py_type<T: ResourceTracker>(&self, _heap: Option<&Heap<'c, 'e, T>>) -> &'static str {
         "bytes"
     }
 
-    fn py_len(&self, _heap: &Heap<'c, 'e>) -> Option<usize> {
+    fn py_estimate_size(&self) -> usize {
+        std::mem::size_of::<Self>() + self.0.len()
+    }
+
+    fn py_len<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> Option<usize> {
         Some(self.0.len())
     }
 
-    fn py_eq(&self, other: &Self, _heap: &mut Heap<'c, 'e>) -> bool {
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, _heap: &mut Heap<'c, 'e, T>) -> bool {
         self.0 == other.0
     }
 
@@ -81,22 +82,14 @@ impl<'c, 'e> PyTrait<'c, 'e> for Bytes {
         // No-op: bytes don't hold Value references
     }
 
-    fn py_bool(&self, _heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, _heap: &Heap<'c, 'e, T>) -> bool {
         !self.0.is_empty()
     }
 
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_repr<'a, T: ResourceTracker>(&'a self, _heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         Cow::Owned(bytes_repr(&self.0))
     }
-
-    fn py_call_attr(
-        &mut self,
-        heap: &mut Heap<'c, 'e>,
-        attr: &Attr,
-        _args: ArgValues<'c, 'e>,
-    ) -> RunResult<'static, Value<'c, 'e>> {
-        Err(ExcType::attribute_error(self.py_type(heap), attr))
-    }
+    // py_call_attr uses default implementation which returns AttributeError
 }
 
 /// Returns a CPython-compatible repr string for bytes.

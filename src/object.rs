@@ -12,6 +12,7 @@ use crate::{
     exceptions::{ExcType, SimpleException},
     expressions::FrameExit,
     heap::{Heap, HeapData},
+    resource::ResourceTracker,
     value::Value,
     values::{
         bytes::{bytes_repr, Bytes},
@@ -110,7 +111,7 @@ impl PyObject {
     ///
     /// Takes ownership of the `FrameExit` and its contained `Value`, extracts the value,
     /// then properly drops the Value via `drop_with_heap` to maintain reference counting.
-    pub(crate) fn new<'c, 'e>(exit: FrameExit<'c, 'e>, heap: &mut Heap<'c, 'e>) -> Self {
+    pub(crate) fn new<'c, 'e, T: ResourceTracker>(exit: FrameExit<'c, 'e>, heap: &mut Heap<'c, 'e, T>) -> Self {
         match exit {
             FrameExit::Return(obj) => {
                 let value = Self::from_value(&obj, heap);
@@ -129,28 +130,31 @@ impl PyObject {
     /// # Errors
     /// Returns `InvalidInputError` if called on the `Repr` variant,
     /// as it is only valid as an output from code execution, not as an input.
-    pub(crate) fn to_value<'c, 'e>(self, heap: &mut Heap<'c, 'e>) -> Result<Value<'c, 'e>, InvalidInputError> {
+    pub(crate) fn to_value<'c, 'e, T: ResourceTracker>(
+        self,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Value<'c, 'e>, InvalidInputError> {
         match self {
             Self::Ellipsis => Ok(Value::Ellipsis),
             Self::None => Ok(Value::None),
             Self::Bool(b) => Ok(Value::Bool(b)),
             Self::Int(i) => Ok(Value::Int(i)),
             Self::Float(f) => Ok(Value::Float(f)),
-            Self::String(s) => Ok(Value::Ref(heap.allocate(HeapData::Str(Str::new(s))))),
-            Self::Bytes(b) => Ok(Value::Ref(heap.allocate(HeapData::Bytes(Bytes::new(b))))),
+            Self::String(s) => Ok(Value::Ref(heap.allocate(HeapData::Str(Str::new(s)))?)),
+            Self::Bytes(b) => Ok(Value::Ref(heap.allocate(HeapData::Bytes(Bytes::new(b)))?)),
             Self::List(items) => {
                 let values: Vec<Value<'c, 'e>> = items
                     .into_iter()
                     .map(|item| item.to_value(heap))
                     .collect::<Result<_, _>>()?;
-                Ok(Value::Ref(heap.allocate(HeapData::List(List::new(values)))))
+                Ok(Value::Ref(heap.allocate(HeapData::List(List::new(values)))?))
             }
             Self::Tuple(items) => {
                 let values: Vec<Value<'c, 'e>> = items
                     .into_iter()
                     .map(|item| item.to_value(heap))
                     .collect::<Result<_, _>>()?;
-                Ok(Value::Ref(heap.allocate(HeapData::Tuple(Tuple::from_vec(values)))))
+                Ok(Value::Ref(heap.allocate(HeapData::Tuple(Tuple::from_vec(values)))?))
             }
             Self::Dict(map) => {
                 let pairs: Result<Vec<(Value<'c, 'e>, Value<'c, 'e>)>, InvalidInputError> = map
@@ -159,7 +163,7 @@ impl PyObject {
                     .collect();
                 // PyObject Dict keys are already validated as hashable, so unwrap is safe
                 let dict = Dict::from_pairs(pairs?, heap).expect("PyObject Dict should only contain hashable keys");
-                Ok(Value::Ref(heap.allocate(HeapData::Dict(dict))))
+                Ok(Value::Ref(heap.allocate(HeapData::Dict(dict))?))
             }
             Self::Exception { exc_type, arg } => {
                 let exc = SimpleException::new(exc_type, arg.map(Into::into));
@@ -169,7 +173,7 @@ impl PyObject {
         }
     }
 
-    fn from_value(object: &Value, heap: &Heap) -> Self {
+    fn from_value<T: ResourceTracker>(object: &Value, heap: &Heap<'_, '_, T>) -> Self {
         match object {
             Value::Undefined => panic!("Undefined found while converting to PyObject"),
             Value::Ellipsis => Self::Ellipsis,
@@ -410,14 +414,6 @@ impl AsRef<PyObject> for PyObject {
 ///
 /// This error is returned by the `TryFrom` implementations when attempting to extract
 /// a specific type from a `PyObject` that holds a different variant.
-///
-/// # Example
-///
-/// ```ignore
-/// let obj = PyObject::String("hello".to_string());
-/// let result: Result<i64, ConversionError> = (&obj).try_into();
-/// assert!(result.is_err());
-/// ```
 #[derive(Debug)]
 pub struct ConversionError {
     /// The type name that was expected (e.g., "int", "str").
@@ -444,29 +440,46 @@ impl std::error::Error for ConversionError {}
 
 /// Error returned when a `PyObject` cannot be used as an input to code execution.
 ///
-/// Some `PyObject` variants (like `Repr`) are only valid as outputs
-/// from code execution, not as inputs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidInputError {
-    /// The type name of the invalid input value
-    pub type_name: &'static str,
+/// This can occur when:
+/// - A `PyObject` variant (like `Repr`) is only valid as an output, not an input
+/// - A resource limit (memory, allocations) is exceeded during conversion
+#[derive(Debug, Clone)]
+pub enum InvalidInputError {
+    /// The input type is not valid for conversion to a runtime Value.
+    InvalidType {
+        /// The type name of the invalid input value
+        type_name: &'static str,
+    },
+    /// A resource limit was exceeded during conversion.
+    Resource(crate::resource::ResourceError),
 }
 
 impl InvalidInputError {
     /// Creates a new `InvalidInputError` for the given type name.
     #[must_use]
     pub fn new(type_name: &'static str) -> Self {
-        Self { type_name }
+        Self::InvalidType { type_name }
     }
 }
 
 impl fmt::Display for InvalidInputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "'{}' is not a valid input value", self.type_name)
+        match self {
+            Self::InvalidType { type_name } => {
+                write!(f, "'{type_name}' is not a valid input value")
+            }
+            Self::Resource(e) => write!(f, "{e}"),
+        }
     }
 }
 
 impl std::error::Error for InvalidInputError {}
+
+impl From<crate::resource::ResourceError> for InvalidInputError {
+    fn from(err: crate::resource::ResourceError) -> Self {
+        Self::Resource(err)
+    }
+}
 
 /// Attempts to convert a PyObject to an i64 integer.
 /// Returns an error if the object is not an Int variant.

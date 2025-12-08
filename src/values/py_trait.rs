@@ -12,6 +12,7 @@ use std::cmp::Ordering;
 use crate::args::ArgValues;
 use crate::exceptions::ExcType;
 use crate::heap::{Heap, HeapId};
+use crate::resource::ResourceTracker;
 use crate::run::RunResult;
 use crate::value::{Attr, Value};
 
@@ -26,32 +27,36 @@ use crate::value::{Attr, Value};
 ///
 /// The lifetime `'e` represents the lifetime of borrowed data (e.g., interned strings)
 /// that may be contained within Values.
+///
+/// Many methods are generic over `T: ResourceTracker` to work with any heap
+/// configuration. This allows the same trait to work with both unlimited and
+/// resource-limited execution contexts.
 pub trait PyTrait<'c, 'e> {
     /// Returns the Python type name for this value (e.g., "list", "str").
     ///
     /// Used for error messages and the `type()` builtin.
     /// Takes heap reference for cases where nested Value lookups are needed.
-    fn py_type(&self, heap: &Heap<'c, 'e>) -> &'static str;
+    fn py_type<T: ResourceTracker>(&self, heap: Option<&Heap<'c, 'e, T>>) -> &'static str;
 
     /// Returns the number of elements in this container.
     ///
     /// For strings, returns the number of Unicode codepoints (characters), matching Python.
     /// Returns `None` if the type doesn't support `len()`.
-    fn py_len(&self, heap: &Heap<'c, 'e>) -> Option<usize>;
+    fn py_len<T: ResourceTracker>(&self, heap: &Heap<'c, 'e, T>) -> Option<usize>;
 
     /// Python equality comparison (`==`).
     ///
     /// For containers, this performs element-wise comparison using the heap
     /// to resolve nested references. Takes `&mut Heap` to allow lazy hash
     /// computation for dict key lookups.
-    fn py_eq(&self, other: &Self, heap: &mut Heap<'c, 'e>) -> bool;
+    fn py_eq<T: ResourceTracker>(&self, other: &Self, heap: &mut Heap<'c, 'e, T>) -> bool;
 
     /// Python comparison (`<`, `>`, etc.).
     ///
     /// For containers, this performs element-wise comparison using the heap
     /// to resolve nested references. Takes `&mut Heap` to allow lazy hash
     /// computation for dict key lookups.
-    fn py_cmp(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Ordering> {
+    fn py_cmp<T: ResourceTracker>(&self, _other: &Self, _heap: &mut Heap<'c, 'e, T>) -> Option<Ordering> {
         None
     }
 
@@ -68,26 +73,40 @@ pub trait PyTrait<'c, 'e> {
     /// Returns the truthiness of the value following Python semantics.
     ///
     /// Container types should typically report `false` when empty.
-    fn py_bool(&self, heap: &Heap<'c, 'e>) -> bool {
+    fn py_bool<T: ResourceTracker>(&self, heap: &Heap<'c, 'e, T>) -> bool {
         self.py_len(heap) != Some(0)
     }
 
     /// Returns the Python `repr()` string for this value.
-    fn py_repr<'a>(&'a self, _heap: &'a Heap<'c, 'e>) -> Cow<'a, str>;
+    fn py_repr<'a, T: ResourceTracker>(&'a self, _heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str>;
 
     /// Returns the Python `str()` string for this value.
-    fn py_str<'a>(&'a self, heap: &'a Heap<'c, 'e>) -> Cow<'a, str> {
+    fn py_str<'a, T: ResourceTracker>(&'a self, heap: &'a Heap<'c, 'e, T>) -> Cow<'a, str> {
         self.py_repr(heap)
     }
 
     /// Python addition (`__add__`).
-    fn py_add(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Value<'c, 'e>> {
-        None
+    ///
+    /// Returns `Ok(None)` if the operation is not supported for these types,
+    /// `Ok(Some(value))` on success, or `Err(ResourceError)` if allocation fails.
+    fn py_add<T: ResourceTracker>(
+        &self,
+        _other: &Self,
+        _heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Value<'c, 'e>>, crate::resource::ResourceError> {
+        Ok(None)
     }
 
     /// Python subtraction (`__sub__`).
-    fn py_sub(&self, _other: &Self, _heap: &mut Heap<'c, 'e>) -> Option<Value<'c, 'e>> {
-        None
+    ///
+    /// Returns `Ok(None)` if the operation is not supported for these types,
+    /// `Ok(Some(value))` on success, or `Err(ResourceError)` if allocation fails.
+    fn py_sub<T: ResourceTracker>(
+        &self,
+        _other: &Self,
+        _heap: &mut Heap<'c, 'e, T>,
+    ) -> Result<Option<Value<'c, 'e>>, crate::resource::ResourceError> {
+        Ok(None)
     }
 
     /// Python modulus (`__mod__`).
@@ -104,22 +123,40 @@ pub trait PyTrait<'c, 'e> {
     ///
     /// # Returns
     ///
-    /// Returns `true` if the operation was successful, `false` otherwise.
-    fn py_iadd(&mut self, _other: Value<'c, 'e>, _heap: &mut Heap<'c, 'e>, _self_id: Option<HeapId>) -> bool {
-        false
+    /// Returns `Ok(true)` if the operation was successful, `Ok(false)` if not supported,
+    /// or `Err(ResourceError)` if allocation fails.
+    fn py_iadd<T: ResourceTracker>(
+        &mut self,
+        _other: Value<'c, 'e>,
+        _heap: &mut Heap<'c, 'e, T>,
+        _self_id: Option<HeapId>,
+    ) -> Result<bool, crate::resource::ResourceError> {
+        Ok(false)
     }
 
     /// Calls an attribute method on this value (e.g., `list.append()`).
     ///
     /// Returns an error if the attribute doesn't exist or the arguments are invalid.
-    fn py_call_attr(
+    /// Generic over ResourceTracker to work with any heap configuration.
+    fn py_call_attr<T: ResourceTracker>(
         &mut self,
-        heap: &mut Heap<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
         attr: &Attr,
         _args: ArgValues<'c, 'e>,
     ) -> RunResult<'c, Value<'c, 'e>> {
-        Err(ExcType::attribute_error(self.py_type(heap), attr))
+        Err(ExcType::attribute_error(self.py_type(Some(heap)), attr))
     }
+
+    /// Estimates the memory size in bytes of this value.
+    ///
+    /// Used by resource tracking to enforce memory limits. Returns the approximate
+    /// heap footprint including struct overhead and variable-length data (e.g., string
+    /// contents, list elements).
+    ///
+    /// Note: For containers holding `Value::Ref` entries, this counts the size of
+    /// the reference slots, not the referenced objects. Nested objects are sized
+    /// separately when they are allocated.
+    fn py_estimate_size(&self) -> usize;
 
     /// Python subscript get operation (`__getitem__`), e.g., `d[key]`.
     ///
@@ -130,8 +167,12 @@ pub trait PyTrait<'c, 'e> {
     /// the returned value.
     ///
     /// Default implementation returns TypeError.
-    fn py_getitem(&self, _key: &Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, Value<'c, 'e>> {
-        Err(ExcType::type_error_not_sub(self.py_type(heap)))
+    fn py_getitem<T: ResourceTracker>(
+        &self,
+        _key: &Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, Value<'c, 'e>> {
+        Err(ExcType::type_error_not_sub(self.py_type(Some(heap))))
     }
 
     /// Python subscript set operation (`__setitem__`), e.g., `d[key] = value`.
@@ -140,9 +181,15 @@ pub trait PyTrait<'c, 'e> {
     /// or the type doesn't support subscript assignment.
     ///
     /// Default implementation returns TypeError.
-    fn py_setitem(&mut self, _key: Value<'c, 'e>, _value: Value<'c, 'e>, heap: &mut Heap<'c, 'e>) -> RunResult<'c, ()> {
+    fn py_setitem<T: ResourceTracker>(
+        &mut self,
+        _key: Value<'c, 'e>,
+        _value: Value<'c, 'e>,
+        heap: &mut Heap<'c, 'e, T>,
+    ) -> RunResult<'c, ()> {
         Err(ExcType::TypeError).map_err(|e| {
-            crate::exceptions::exc_fmt!(e; "'{}' object does not support item assignment", self.py_type(heap)).into()
+            crate::exceptions::exc_fmt!(e; "'{}' object does not support item assignment", self.py_type(Some(heap)))
+                .into()
         })
     }
 }

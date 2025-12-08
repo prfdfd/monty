@@ -41,6 +41,8 @@ Avoid local imports, unless there's a very good reason, all imports should be at
 IMPORTANT: every struct, enum and function should be a comprehensive but concise docstring to
 explain what it does and why and any considerations or potential foot-guns of using that type.
 
+Only add examples to docstrings of public functions and structs.
+
 The only exception is trait implementation methods where a docstring is not necessary if the method is self-explanatory.
 
 Similarly, you should add lots of comments to code.
@@ -93,6 +95,8 @@ You should prefer single quotes for strings in python tests.
 - `# skip=monty` - Skip Monty test (only run on CPython)
 - `# skip=monty,cpython` - Skip both (useful for temporarily disabling a test)
 
+DO NOT use `skip` unless absolutely necessary, ask for approval before using `skip`!
+
 Run `make lint-py` after adding tests to lint them, you may need to disable some linting rules by editing `pyproject.toml` to allow all syntax in the test files.
 
 Use `make complete-tests` after adding tests with the expectations blank e.g. `# Return=` to fill in the expected value.
@@ -108,6 +112,8 @@ Heap-allocated values (`Value::Ref`) use manual reference counting. Key rules:
 - **Borrow conflicts**: When you need to read from the heap and then mutate it, use `copy_for_extend()` to copy the `Value` without incrementing refcount, then call `heap.inc_ref()` separately after the borrow ends.
 
 Container types (`List`, `Tuple`, `Dict`) also have `clone_with_heap()` methods.
+
+**Resource limits**: When resource limits (allocations, memory, time) are exceeded, execution terminates with a `ResourceError`. No guarantees are made about the state of the heap or reference counts after a resource limit is exceeded. The heap may contain orphaned objects with incorrect refcounts. This is acceptable because resource exhaustion is a terminal error - the execution context should be discarded.
 
 ## NOTES
 

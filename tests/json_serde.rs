@@ -30,7 +30,7 @@ fn json_input_run_code() {
     // Deserialize JSON and use as input to executor
     let input: PyObject = serde_json::from_str(r#"{"x": 10, "y": 32}"#).unwrap();
     let ex = Executor::new("data['x'] + data['y']", "test.py", &["data"]).unwrap();
-    let result = ex.run(vec![input]).unwrap();
+    let result = ex.run_no_limits(vec![input]).unwrap();
     assert_eq!(result, PyObject::Int(42));
 }
 
@@ -38,7 +38,7 @@ fn json_input_run_code() {
 fn json_input_nested() {
     let input: PyObject = serde_json::from_str(r#"{"outer": {"inner": [1, 2, 3]}}"#).unwrap();
     let ex = Executor::new("x['outer']['inner'][1]", "test.py", &["x"]).unwrap();
-    let result = ex.run(vec![input]).unwrap();
+    let result = ex.run_no_limits(vec![input]).unwrap();
     assert_eq!(result, PyObject::Int(2));
 }
 
@@ -60,14 +60,14 @@ fn json_output_primitives() {
 #[test]
 fn json_output_list() {
     let ex = Executor::new("[1, 'two', 3.0]", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"[1,"two",3.0]"#);
 }
 
 #[test]
 fn json_output_dict() {
     let ex = Executor::new("{'a': 1, 'b': 2}", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"a":1,"b":2}"#);
 }
 
@@ -85,21 +85,21 @@ fn json_output_dict_nonstring_key() {
 #[test]
 fn json_output_tuple() {
     let ex = Executor::new("(1, 'two')", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$tuple":[1,"two"]}"#);
 }
 
 #[test]
 fn json_output_bytes() {
     let ex = Executor::new("b'hi'", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$bytes":[104,105]}"#);
 }
 
 #[test]
 fn json_output_ellipsis() {
     let ex = Executor::new("...", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$ellipsis":true}"#);
 }
 
@@ -127,7 +127,7 @@ fn json_output_repr() {
 fn json_roundtrip() {
     // Values that can round-trip through JSON
     let ex = Executor::new("{'items': [1, 'two', None], 'flag': True}", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let json = serde_json::to_string(&result).unwrap();
     let parsed: PyObject = serde_json::from_str(&json).unwrap();
     assert_eq!(result, parsed);

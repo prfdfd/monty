@@ -10,7 +10,7 @@ use monty::Executor;
 #[allow(clippy::float_cmp)]
 fn try_from_ok_int_to_i64() {
     let ex = Executor::new("42", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: i64 = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, 42);
 }
@@ -19,7 +19,7 @@ fn try_from_ok_int_to_i64() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_zero_to_i64() {
     let ex = Executor::new("0", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: i64 = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, 0);
 }
@@ -28,7 +28,7 @@ fn try_from_ok_zero_to_i64() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_float_to_f64() {
     let ex = Executor::new("2.5", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: f64 = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, 2.5);
 }
@@ -37,7 +37,7 @@ fn try_from_ok_float_to_f64() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_int_to_f64() {
     let ex = Executor::new("42", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: f64 = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, 42.0);
 }
@@ -46,7 +46,7 @@ fn try_from_ok_int_to_f64() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_string_to_string() {
     let ex = Executor::new("'hello'", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: String = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, "hello".to_string());
 }
@@ -55,7 +55,7 @@ fn try_from_ok_string_to_string() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_empty_string_to_string() {
     let ex = Executor::new("''", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: String = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, String::new());
 }
@@ -64,7 +64,7 @@ fn try_from_ok_empty_string_to_string() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_multiline_string_to_string() {
     let ex = Executor::new("'hello\\nworld'", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: String = (&result).try_into().expect("conversion should succeed");
     assert_eq!(value, "hello\nworld".to_string());
 }
@@ -73,7 +73,7 @@ fn try_from_ok_multiline_string_to_string() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_bool_true_to_bool() {
     let ex = Executor::new("True", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: bool = (&result).try_into().expect("conversion should succeed");
     assert!(value);
 }
@@ -82,7 +82,7 @@ fn try_from_ok_bool_true_to_bool() {
 #[allow(clippy::float_cmp)]
 fn try_from_ok_bool_false_to_bool() {
     let ex = Executor::new("False", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let value: bool = (&result).try_into().expect("conversion should succeed");
     assert!(!value);
 }
@@ -96,7 +96,7 @@ fn try_from_ok_bool_false_to_bool() {
 #[test]
 fn try_from_err_string_to_i64() {
     let ex = Executor::new("'hello'", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<i64>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected int, got str");
 }
@@ -104,7 +104,7 @@ fn try_from_err_string_to_i64() {
 #[test]
 fn try_from_err_float_to_i64() {
     let ex = Executor::new("2.5", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<i64>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected int, got float");
 }
@@ -112,7 +112,7 @@ fn try_from_err_float_to_i64() {
 #[test]
 fn try_from_err_none_to_i64() {
     let ex = Executor::new("None", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<i64>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected int, got NoneType");
 }
@@ -120,7 +120,7 @@ fn try_from_err_none_to_i64() {
 #[test]
 fn try_from_err_list_to_i64() {
     let ex = Executor::new("[1, 2, 3]", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<i64>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected int, got list");
 }
@@ -128,7 +128,7 @@ fn try_from_err_list_to_i64() {
 #[test]
 fn try_from_err_int_to_string() {
     let ex = Executor::new("42", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<String>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected str, got int");
 }
@@ -136,7 +136,7 @@ fn try_from_err_int_to_string() {
 #[test]
 fn try_from_err_none_to_string() {
     let ex = Executor::new("None", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<String>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected str, got NoneType");
 }
@@ -144,7 +144,7 @@ fn try_from_err_none_to_string() {
 #[test]
 fn try_from_err_list_to_string() {
     let ex = Executor::new("[1, 2]", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<String>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected str, got list");
 }
@@ -152,7 +152,7 @@ fn try_from_err_list_to_string() {
 #[test]
 fn try_from_err_int_to_bool() {
     let ex = Executor::new("1", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<bool>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected bool, got int");
 }
@@ -160,7 +160,7 @@ fn try_from_err_int_to_bool() {
 #[test]
 fn try_from_err_string_to_bool() {
     let ex = Executor::new("'true'", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<bool>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected bool, got str");
 }
@@ -168,7 +168,7 @@ fn try_from_err_string_to_bool() {
 #[test]
 fn try_from_err_none_to_bool() {
     let ex = Executor::new("None", "test.py", &[]).unwrap();
-    let result = ex.run(vec![]).unwrap();
+    let result = ex.run_no_limits(vec![]).unwrap();
     let err = TryInto::<bool>::try_into(&result).expect_err("conversion should fail");
     assert_eq!(err.to_string(), "expected bool, got NoneType");
 }

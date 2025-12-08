@@ -61,6 +61,7 @@ reportUnhashable = false
 reportCallIssue = false
 reportUnknownParameterType = false
 reportMissingParameterType = false
+reportArgumentType = false
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file
