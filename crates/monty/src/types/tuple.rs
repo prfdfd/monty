@@ -9,6 +9,7 @@ use ahash::AHashSet;
 
 use crate::args::ArgValues;
 use crate::exceptions::ExcType;
+use crate::for_iterator::ForIterator;
 use crate::types::Type;
 
 use super::list::repr_sequence_fmt;
@@ -61,11 +62,7 @@ impl Tuple {
     /// Creates a tuple from the `tuple()` constructor call.
     ///
     /// - `tuple()` with no args returns an empty tuple
-    /// - `tuple(tuple)` returns a shallow copy of the tuple
-    /// - `tuple(list)` converts the list to a tuple
-    /// - `tuple(range)` creates a tuple from the range
-    ///
-    /// Note: Full Python semantics support any iterable.
+    /// - `tuple(iterable)` creates a tuple from any iterable (list, tuple, range, str, bytes, dict)
     pub fn init(heap: &mut Heap<impl ResourceTracker>, args: ArgValues, interns: &Interns) -> RunResult<Value> {
         let value = args.get_zero_one_arg("tuple")?;
         match value {
@@ -74,71 +71,16 @@ impl Tuple {
                 Ok(Value::Ref(heap_id))
             }
             Some(v) => {
-                let result = match &v {
-                    Value::Range(range) => {
-                        // Create tuple from range values
-                        let items: Vec<Value> = range.iter().map(Value::Int).collect();
-                        heap.allocate(HeapData::Tuple(Tuple::new(items)))
-                    }
-                    Value::Ref(id) => {
-                        let id = *id;
-                        // Extract items based on type, copy without refcount increment
-                        let (items, is_str): (Option<Vec<Value>>, Option<String>) = match heap.get(id) {
-                            HeapData::Tuple(tuple) => {
-                                let items = tuple.as_vec().iter().map(Value::copy_for_extend).collect();
-                                (Some(items), None)
-                            }
-                            HeapData::List(list) => {
-                                let items = list.as_vec().iter().map(Value::copy_for_extend).collect();
-                                (Some(items), None)
-                            }
-                            HeapData::Str(s) => (None, Some(s.as_str().to_owned())),
-                            _ => {
-                                let err = ExcType::type_error_not_iterable(v.py_type(Some(heap)));
-                                v.drop_with_heap(heap);
-                                return Err(err);
-                            }
-                        };
-
-                        if let Some(items) = items {
-                            // Increment refcounts for copied items
-                            for item in &items {
-                                if let Value::Ref(item_id) = item {
-                                    heap.inc_ref(*item_id);
-                                }
-                            }
-                            heap.allocate(HeapData::Tuple(Tuple::new(items)))
-                        } else if let Some(s) = is_str {
-                            // tuple('abc') -> ('a', 'b', 'c')
-                            let mut items = Vec::new();
-                            for c in s.chars() {
-                                let char_str = c.to_string();
-                                let char_id = heap.allocate(HeapData::Str(char_str.into()))?;
-                                items.push(Value::Ref(char_id));
-                            }
-                            heap.allocate(HeapData::Tuple(Tuple::new(items)))
-                        } else {
-                            unreachable!()
-                        }
-                    }
-                    Value::InternString(string_id) => {
-                        let s = interns.get_str(*string_id);
-                        let mut items = Vec::new();
-                        for c in s.chars() {
-                            let char_str = c.to_string();
-                            let id = heap.allocate(HeapData::Str(char_str.into()))?;
-                            items.push(Value::Ref(id));
-                        }
-                        heap.allocate(HeapData::Tuple(Tuple::new(items)))
-                    }
-                    _ => {
-                        let err = ExcType::type_error_not_iterable(v.py_type(Some(heap)));
-                        v.drop_with_heap(heap);
-                        return Err(err);
-                    }
-                };
-                v.drop_with_heap(heap);
-                Ok(Value::Ref(result?))
+                if let Some(iter) = ForIterator::new(&v, heap, interns) {
+                    let items = iter.collect(heap, interns)?;
+                    v.drop_with_heap(heap);
+                    let heap_id = heap.allocate(HeapData::Tuple(Tuple::new(items)))?;
+                    Ok(Value::Ref(heap_id))
+                } else {
+                    let err = ExcType::type_error_not_iterable(v.py_type(Some(heap)));
+                    v.drop_with_heap(heap);
+                    Err(err)
+                }
             }
         }
     }

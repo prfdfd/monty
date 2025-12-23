@@ -73,6 +73,8 @@ reportMissingParameterType = false
 reportArgumentType = false
 # iter mode tests use external functions defined in the test runner
 reportUndefinedVariable = false
+# loop variable persistence tests have "possibly unbound" variables
+reportPossiblyUnboundVariable = false
 
 [tool.codespell]
 # Ref: https://github.com/codespell-project/codespell#using-a-config-file

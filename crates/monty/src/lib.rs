@@ -5,6 +5,7 @@ mod evaluate;
 pub mod exceptions;
 mod executor;
 mod expressions;
+mod for_iterator;
 mod fstring;
 mod function;
 mod heap;

@@ -4,6 +4,7 @@ use crate::exceptions::{
     exc_err_static, exc_fmt, internal_err, ExcType, InternalRunError, RunError, SimpleException, StackFrame,
 };
 use crate::expressions::{ExprLoc, Identifier, NameScope, Node};
+use crate::for_iterator::ForIterator;
 use crate::heap::{Heap, HeapData};
 use crate::intern::{FunctionId, Interns, StringId, MODULE_STRING_ID};
 use crate::io::PrintWriter;
@@ -576,12 +577,8 @@ impl<'i, P: AbstractPositionTracker, W: PrintWriter> RunFrame<'i, P, W> {
     /// Returns `Some(FrameExit)` if a yield or explicit return occurred in the body,
     /// `None` if the loop completed normally.
     ///
-    /// # Note on Yield Resumption
-    ///
-    /// TODO: For loop resumption after yield is not yet supported. Currently, yielding
-    /// inside a for loop will detect the yield and return it, but resumption will
-    /// continue after the entire for loop rather than from within the loop body.
-    /// Supporting this requires tracking the loop iteration index in the position stack.
+    /// Supports iteration over: Range, List, Tuple, Dict (keys), Str (chars), Bytes (ints).
+    /// Uses `ForIterator` for unified iteration with index-based state for resumption.
     #[allow(clippy::too_many_arguments)]
     fn for_(
         &mut self,
@@ -594,20 +591,53 @@ impl<'i, P: AbstractPositionTracker, W: PrintWriter> RunFrame<'i, P, W> {
         start_index: usize,
     ) -> RunResult<Option<FrameExit>> {
         let iter_value = frame_ext_call!(self.execute_expr(namespaces, heap, iter)?);
-        let Value::Range(range) = iter_value else {
-            return internal_err!(InternalRunError::TodoError; "`for` iter must be a range");
+
+        // Create ForIterator from value, returns None for non-iterables
+        let Some(mut for_iter) = ForIterator::new(&iter_value, heap, self.interns) else {
+            let err = ExcType::type_error_not_iterable(iter_value.py_type(Some(heap)));
+            iter_value.drop_with_heap(heap);
+            return Err(err);
         };
 
+        // Skip to resume position (for resuming after yield/external call)
+        for_iter.skip(start_index);
+
         let namespace_id = target.namespace_id();
-        for value in range.iter().skip(start_index) {
-            // For loop target is always local scope
+        loop {
+            let iter_index = for_iter.index();
+            let value = match for_iter.for_next(heap, self.interns) {
+                Ok(Some(v)) => v,
+                Ok(None) => break, // Iteration complete
+                Err(e) => {
+                    iter_value.drop_with_heap(heap);
+                    return Err(e);
+                }
+            };
+
+            // For loop target is always local scope - must drop old value properly
             let namespace = namespaces.get_mut(self.local_idx);
-            namespace.set(namespace_id, Value::Int(value));
-            if let Some(exit) = self.execute(namespaces, heap, body)? {
-                self.position_tracker.set_clause_state(ClauseState::For(value as usize));
-                return Ok(Some(exit));
+            let old_value = std::mem::replace(namespace.get_mut(namespace_id), value);
+            old_value.drop_with_heap(heap);
+
+            match self.execute(namespaces, heap, body) {
+                Ok(Some(exit)) => {
+                    // Save current index for resumption (index taken before for_next)
+                    // On resume, we'll re-execute this iteration's body with position tracking
+                    // handling the internal resumption point within the body
+                    self.position_tracker.set_clause_state(ClauseState::For(iter_index));
+                    iter_value.drop_with_heap(heap);
+                    return Ok(Some(exit));
+                }
+                Ok(None) => {} // Continue loop
+                Err(e) => {
+                    iter_value.drop_with_heap(heap);
+                    return Err(e);
+                }
             }
         }
+
+        // Drop the original iterable value after loop completes
+        iter_value.drop_with_heap(heap);
         Ok(None)
     }
 

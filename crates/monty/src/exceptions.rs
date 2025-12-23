@@ -37,6 +37,7 @@ pub enum ExcType {
     NotImplementedError,
     ZeroDivisionError,
     OverflowError,
+    RuntimeError,
 }
 
 /// Formats a list of parameter names for error messages.
@@ -360,6 +361,14 @@ impl ExcType {
     #[must_use]
     pub fn value_error_range_step_zero() -> RunError {
         exc_static!(Self::ValueError; "range() arg 3 must not be zero").into()
+    }
+
+    /// Creates a RuntimeError for dict mutation during iteration.
+    ///
+    /// Matches CPython's format: `RuntimeError: dictionary changed size during iteration`
+    #[must_use]
+    pub fn runtime_error_dict_changed_size() -> RunError {
+        exc_static!(Self::RuntimeError; "dictionary changed size during iteration").into()
     }
 
     /// Creates a TypeError for functions that don't accept keyword arguments.

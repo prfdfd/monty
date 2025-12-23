@@ -66,3 +66,17 @@ assert lst == [1, 2, 1, 2], 'list imult'
 lst = [1]
 lst *= 0
 assert lst == [], 'list imult zero'
+
+# === list() constructor ===
+assert list() == [], 'list() empty'
+assert list([1, 2, 3]) == [1, 2, 3], 'list from list'
+assert list((1, 2, 3)) == [1, 2, 3], 'list from tuple'
+assert list(range(3)) == [0, 1, 2], 'list from range'
+assert list('abc') == ['a', 'b', 'c'], 'list from string'
+assert list(b'abc') == [97, 98, 99], 'list from bytes'
+assert list({'a': 1, 'b': 2}) == ['a', 'b'], 'list from dict yields keys'
+
+# non-ASCII strings (multi-byte UTF-8)
+assert list('héllo') == ['h', 'é', 'l', 'l', 'o'], 'list from string with accented char'
+assert list('日本') == ['日', '本'], 'list from string with CJK chars'
+assert list('a🎉b') == ['a', '🎉', 'b'], 'list from string with emoji'

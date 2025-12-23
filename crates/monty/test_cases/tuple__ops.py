@@ -25,3 +25,17 @@ assert (1,) * 0 == (), 'tuple mult zero'
 assert (1,) * -1 == (), 'tuple mult negative'
 assert () * 5 == (), 'empty tuple mult'
 assert (1, 2) * 1 == (1, 2), 'tuple mult one'
+
+# === tuple() constructor ===
+assert tuple() == (), 'tuple() empty'
+assert tuple([1, 2, 3]) == (1, 2, 3), 'tuple from list'
+assert tuple((1, 2, 3)) == (1, 2, 3), 'tuple from tuple'
+assert tuple(range(3)) == (0, 1, 2), 'tuple from range'
+assert tuple('abc') == ('a', 'b', 'c'), 'tuple from string'
+assert tuple(b'abc') == (97, 98, 99), 'tuple from bytes'
+assert tuple({'a': 1, 'b': 2}) == ('a', 'b'), 'tuple from dict yields keys'
+
+# non-ASCII strings (multi-byte UTF-8)
+assert tuple('héllo') == ('h', 'é', 'l', 'l', 'o'), 'tuple from string with accented char'
+assert tuple('日本') == ('日', '本'), 'tuple from string with CJK chars'
+assert tuple('a🎉b') == ('a', '🎉', 'b'), 'tuple from string with emoji'

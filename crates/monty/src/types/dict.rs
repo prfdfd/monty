@@ -271,6 +271,14 @@ impl Dict {
         self.into_iter()
     }
 
+    /// Returns the key at the given iteration index, or None if out of bounds.
+    ///
+    /// Used for index-based iteration in for loops. Returns a reference to
+    /// the key at the given position in insertion order.
+    pub fn key_at(&self, index: usize) -> Option<&Value> {
+        self.entries.get(index).map(|e| &e.key)
+    }
+
     /// Creates a deep clone of this dict with proper reference counting.
     ///
     /// All heap-allocated keys and values have their reference counts
