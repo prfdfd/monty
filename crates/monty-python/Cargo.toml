@@ -1,0 +1,28 @@
+[package]
+name = "monty-python"
+description = "Python bindings for the Monty sandboxed Python interpreter"
+readme = "README.md"
+version = { workspace = true }
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+name = "monty"
+crate-type = ["cdylib"]
+
+[dependencies]
+monty = { path = "../monty" }
+pyo3 = { version = "0.27.2", features = ["extension-module", "indexmap", "generate-import-lib"] }
+indexmap = "2.9"
+
+[features]
+# make extensions visible to cargo vendor
+extension-module = ["pyo3/extension-module", "pyo3/generate-import-lib"]
+
+[lints]
+workspace = true

@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "monty"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "ahash",
  "criterion",
@@ -878,6 +878,15 @@ name = "monty-cli"
 version = "0.1.0"
 dependencies = [
  "monty",
+]
+
+[[package]]
+name = "monty-python"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "monty",
+ "pyo3",
 ]
 
 [[package]]
@@ -1067,6 +1076,7 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab53c047fcd1a1d2a8820fe84f05d6be69e9526be40cb03b73f86b6b03e6d87d"
 dependencies = [
+ "indexmap",
  "indoc",
  "libc",
  "memoffset",
@@ -1084,6 +1094,7 @@ version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b455933107de8642b4487ed26d912c2d899dec6114884214a0b3bb3be9261ea6"
 dependencies = [
+ "python3-dll-a",
  "target-lexicon",
 ]
 
@@ -1120,6 +1131,15 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "python3-dll-a"
+version = "0.2.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d381ef313ae70b4da5f95f8a4de773c6aa5cd28f73adec4b4a31df70b66780d8"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

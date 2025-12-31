@@ -1,4 +1,4 @@
-.DEFAULT_GOAL := all
+.DEFAULT_GOAL := main
 
 .PHONY: .cargo
 .cargo: ## Check that cargo is installed
@@ -10,8 +10,14 @@
 
 .PHONY: install
 install: .cargo .pre-commit ## Install the package, dependencies, and pre-commit for local development
+	# --only-dev to avoid building the python package, use make dev-py for that
+	uv sync --all-packages --only-dev
 	cargo check --workspace
 	pre-commit install --install-hooks
+
+.PHONY: dev-py
+dev-py: ## Install the python package for development
+	uv run maturin develop --uv -m crates/monty-python/Cargo.toml
 
 .PHONY: format-rs
 format-rs:  ## Format Rust code with fmt
@@ -33,10 +39,12 @@ lint-rs:  ## Lint Rust code with fmt and clippy
 	cargo clippy --workspace --tests --all-features -- -D warnings -A incomplete_features
 
 .PHONY: lint-py
-lint-py: ## Lint Python code with ruff
+lint-py: dev-py ## Lint Python code with ruff
 	uv run ruff format --check
 	uv run ruff check
 	uv run basedpyright
+	# mypy-stubtest requires a build of the python package, hence dev-py
+	uv run -m mypy.stubtest monty --allowlist crates/monty-python/.mypy-stubtest-allowlist
 
 .PHONY: lint
 lint: lint-rs lint-py ## Lint the code with ruff and clippy
@@ -44,17 +52,28 @@ lint: lint-rs lint-py ## Lint the code with ruff and clippy
 .PHONY: format-lint-rs
 format-lint-rs: format-rs lint-rs ## Format and lint Rust code with fmt and clippy
 
-.PHONY: test
-test: ## Run tests with ref-count-panic enabled
-	cargo test --workspace --features ref-count-panic
+.PHONY: test-no-features
+test-no-features: ## Run rust tests without any features enabled
+		cargo test -p monty
+
+.PHONY: test-ref-count-panic
+test-ref-count-panic: ## Run rust tests with ref-count-panic enabled
+	cargo test -p monty --features ref-count-panic
 
 .PHONY: test-ref-count-return
-test-ref-count-return: ## Run tests with ref-count-return enabled
-	cargo test --workspace --features ref-count-return
+test-ref-count-return: ## Run rust tests with ref-count-return enabled
+	cargo test -p monty --features ref-count-return
 
 .PHONY: test-cases
 test-cases: ## Run tests cases only
 	cargo test -p monty --test datatest_runner
+
+.PHONY: test-py
+test-py: dev-py ## Run Python tests with pytest
+	uv run pytest
+
+.PHONY: test
+test: test-ref-count-panic test-ref-count-return test-no-features test-py ## Run all tests
 
 .PHONY: complete-tests
 complete-tests: ## Fill in incomplete test expectations using CPython
@@ -78,5 +97,5 @@ type-sizes: ## Print type sizes for the crate (requires nightly and top-type-siz
 	RUSTFLAGS="-Zprint-type-sizes" cargo +nightly build -j1 2>&1 | top-type-sizes -f '^monty.*' > type-sizes.txt
 	@echo "Type sizes written to ./type-sizes.txt"
 
-.PHONY: all
-all: lint test test-ref-count-return
+.PHONY: main
+main: lint test-ref-count-panic test-py ## run linting and the most important tests

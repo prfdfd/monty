@@ -4,7 +4,6 @@
 //! - Bidirectional: null↔None, bool↔Bool, int↔Int, float↔Float, string↔String, array↔List, object↔Dict
 //! - Output-only: Ellipsis, Tuple, Bytes, Exception, Repr (serialize but cannot deserialize)
 
-use indexmap::IndexMap;
 use monty::{ExcType, Executor, PyObject};
 
 // === JSON Input Tests ===
@@ -29,7 +28,7 @@ fn json_input_primitives() {
 fn json_input_run_code() {
     // Deserialize JSON and use as input to executor
     let input: PyObject = serde_json::from_str(r#"{"x": 10, "y": 32}"#).unwrap();
-    let ex = Executor::new("data['x'] + data['y']".to_owned(), "test.py", &["data"]).unwrap();
+    let ex = Executor::new("data['x'] + data['y']".to_owned(), "test.py", vec!["data".to_owned()]).unwrap();
     let result = ex.run_no_limits(vec![input]).unwrap();
     assert_eq!(result, PyObject::Int(42));
 }
@@ -37,7 +36,7 @@ fn json_input_run_code() {
 #[test]
 fn json_input_nested() {
     let input: PyObject = serde_json::from_str(r#"{"outer": {"inner": [1, 2, 3]}}"#).unwrap();
-    let ex = Executor::new("x['outer']['inner'][1]".to_owned(), "test.py", &["x"]).unwrap();
+    let ex = Executor::new("x['outer']['inner'][1]".to_owned(), "test.py", vec!["x".to_owned()]).unwrap();
     let result = ex.run_no_limits(vec![input]).unwrap();
     assert_eq!(result, PyObject::Int(2));
 }
@@ -59,14 +58,14 @@ fn json_output_primitives() {
 
 #[test]
 fn json_output_list() {
-    let ex = Executor::new("[1, 'two', 3.0]".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("[1, 'two', 3.0]".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"[1,"two",3.0]"#);
 }
 
 #[test]
 fn json_output_dict() {
-    let ex = Executor::new("{'a': 1, 'b': 2}".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("{'a': 1, 'b': 2}".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"a":1,"b":2}"#);
 }
@@ -74,9 +73,8 @@ fn json_output_dict() {
 #[test]
 fn json_output_dict_nonstring_key() {
     // Dict with non-string key uses py_repr for the key
-    let mut map = IndexMap::new();
-    map.insert(PyObject::Int(42), PyObject::String("value".to_string()));
-    let obj = PyObject::Dict(map);
+    let map = vec![(PyObject::Int(42), PyObject::String("value".to_string()))];
+    let obj = PyObject::dict(map);
     assert_eq!(serde_json::to_string(&obj).unwrap(), r#"{"42":"value"}"#);
 }
 
@@ -84,21 +82,21 @@ fn json_output_dict_nonstring_key() {
 
 #[test]
 fn json_output_tuple() {
-    let ex = Executor::new("(1, 'two')".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("(1, 'two')".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$tuple":[1,"two"]}"#);
 }
 
 #[test]
 fn json_output_bytes() {
-    let ex = Executor::new("b'hi'".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("b'hi'".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$bytes":[104,105]}"#);
 }
 
 #[test]
 fn json_output_ellipsis() {
-    let ex = Executor::new("...".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("...".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"{"$ellipsis":true}"#);
 }
@@ -124,7 +122,7 @@ fn json_output_repr() {
 #[test]
 fn json_output_cycle_list() {
     // Test JSON serialization of cyclic list
-    let ex = Executor::new("a = []; a.append(a); a".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("a = []; a.append(a); a".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     // The cyclic reference becomes PyObject::Cycle("[...]")
     assert_eq!(serde_json::to_string(&result).unwrap(), r#"[{"$cycle":"[...]"}]"#);
@@ -133,7 +131,7 @@ fn json_output_cycle_list() {
 #[test]
 fn json_output_cycle_dict() {
     // Test JSON serialization of cyclic dict
-    let ex = Executor::new("d = {}; d['self'] = d; d".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("d = {}; d['self'] = d; d".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     // The cyclic reference becomes PyObject::Cycle("{...}")
     assert_eq!(
@@ -147,7 +145,12 @@ fn json_output_cycle_dict() {
 #[test]
 fn json_roundtrip() {
     // Values that can round-trip through JSON
-    let ex = Executor::new("{'items': [1, 'two', None], 'flag': True}".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new(
+        "{'items': [1, 'two', None], 'flag': True}".to_owned(),
+        "test.py",
+        vec![],
+    )
+    .unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
     let json = serde_json::to_string(&result).unwrap();
     let parsed: PyObject = serde_json::from_str(&json).unwrap();
@@ -169,7 +172,7 @@ fn json_roundtrip_empty() {
 fn cycle_equality_same_id() {
     // Multiple references to the same cyclic object should produce equal Cycle values
     // because they share the same heap ID
-    let ex = Executor::new("a = []; a.append(a); [a, a]".to_owned(), "test.py", &[]).unwrap();
+    let ex = Executor::new("a = []; a.append(a); [a, a]".to_owned(), "test.py", vec![]).unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();
 
     // Result should be a list containing two identical cyclic lists
@@ -201,7 +204,7 @@ fn cycle_equality_different_ids() {
     let ex = Executor::new(
         "a = []; a.append(a); b = []; b.append(b); [a, b]".to_owned(),
         "test.py",
-        &[],
+        vec![],
     )
     .unwrap();
     let result = ex.run_no_limits(vec![]).unwrap();

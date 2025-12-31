@@ -196,7 +196,7 @@ impl<'i, P: AbstractSnapshotTracker, W: PrintWriter> RunFrame<'i, P, W> {
                 return self.execute_expr(namespaces, heap, expr).map(|result| match result {
                     EvalResult::Value(value) => Some(FrameExit::Return(value)),
                     EvalResult::ExternalCall(ext_call) => Some(FrameExit::ExternalCall(ext_call)),
-                })
+                });
             }
             Node::ReturnNone => return Ok(Some(FrameExit::Return(Value::None))),
             Node::Raise(exc) => {
@@ -1277,7 +1277,7 @@ struct HandlerResumeState<'a> {
 /// to the exception, so the full call stack is visible when the error is displayed.
 fn add_frame_info(name: StringId, position: CodeRange, error: &mut RunError) {
     match error {
-        RunError::Exc(ref mut exc) | RunError::UncatchableExc(ref mut exc) => {
+        RunError::Exc(exc) | RunError::UncatchableExc(exc) => {
             exc.add_caller_frame(position, name);
         }
         RunError::Internal(_) => {}

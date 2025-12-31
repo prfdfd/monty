@@ -3,7 +3,7 @@ use std::fs;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use monty::{PyObject, RunProgress, RunSnapshot, StdPrint};
+use monty::{NoLimitTracker, PyObject, RunProgress, RunSnapshot, StdPrint};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -19,7 +19,28 @@ fn main() -> ExitCode {
     let inputs = vec![];
     let ext_functions = vec!["add_ints".to_owned()];
 
-    let ex = match RunSnapshot::new(code, file_path, &input_names, ext_functions) {
+    // let ex = match Executor::new(code, file_path, input_names) {
+    //     Ok(ex) => ex,
+    //     Err(err) => {
+    //         eprintln!("error:\n{err}");
+    //         return ExitCode::FAILURE;
+    //     }
+    // };
+
+    // let start = Instant::now();
+    // let value = match ex.run_no_limits(inputs) {
+    //     Ok(p) => p,
+    //     Err(err) => {
+    //         let elapsed = start.elapsed();
+    //         eprintln!("error after: {elapsed:?}\n{err}");
+    //         return ExitCode::FAILURE;
+    //     }
+    // };
+    // let elapsed = start.elapsed();
+    // eprintln!("success after: {elapsed:?}\n{value}");
+    // return ExitCode::SUCCESS;
+
+    let ex = match RunSnapshot::new(code, file_path, input_names, ext_functions) {
         Ok(ex) => ex,
         Err(err) => {
             eprintln!("error:\n{err}");
@@ -28,7 +49,7 @@ fn main() -> ExitCode {
     };
 
     let start = Instant::now();
-    let mut progress = match ex.run_no_limits(inputs, &mut StdPrint) {
+    let mut progress = match ex.run_snapshot(inputs, NoLimitTracker::default(), &mut StdPrint) {
         Ok(p) => p,
         Err(err) => {
             let elapsed = start.elapsed();

@@ -1,6 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["crates/monty", "crates/monty-cli"]
+members = ["crates/monty", "crates/monty-cli", "crates/monty-python"]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "MIT"
+authors = ["Samuel Colvin <samuel@pydantic.dev>"]
+description = "A sandboxed, snapshotable Python interpreter written in Rust."
+categories = ["compilers", "emulators", "development-tools"]
+keywords = ["python", "interpreter", "sandbox", "embedded"]
+homepage = "https://github.com/pydantic/monty/"
+repository = "https://github.com/pydantic/monty/"
+documentation = "https://github.com/pydantic/monty/"
 
 [profile.release]
 lto = "fat"

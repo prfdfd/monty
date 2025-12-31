@@ -19,24 +19,24 @@ use crate::PythonException;
 /// Snapshot-based executor that supports pausing and resuming execution.
 ///
 /// Unlike [`Executor`] which runs code to completion, `RunSnapshot` allows
-/// execution to be paused at function calls and resumed later. Call `run_no_limits()`
-/// or `run_with_limits()` to start execution - it consumes self and returns a `RunProgress`:
+/// execution to be paused at function calls and resumed later. Call `run_snapshot()`
+/// to start execution - it consumes self and returns a `RunProgress`:
 /// - `RunProgress::FunctionCall { ..., state }` - external function call, call `state.run(return_value)` to resume
 /// - `RunProgress::Complete(value)` - execution finished
 ///
 /// This enables snapshotting execution state and returning control to the host
 /// application during long-running computations.
 ///
-/// The snapshot is created with `new()` which parses the code, then `run_no_limits()`
-/// or `run_with_limits()` is called with inputs to start execution. The heap and
-/// namespaces are created lazily when run is called.
+/// The snapshot is created with `new()` which parses the code, then `run_snapshot()`
+/// is called with inputs to start execution. The heap and namespaces are created
+/// lazily when run is called.
 ///
 /// # Example
 /// ```
-/// use monty::{RunSnapshot, RunProgress, PyObject, StdPrint};
+/// use monty::{NoLimitTracker, RunSnapshot, RunProgress, PyObject, StdPrint};
 ///
-/// let snapshot = RunSnapshot::new("x + 1".to_owned(), "test.py", &["x"], vec![]).unwrap();
-/// match snapshot.run_no_limits(vec![PyObject::Int(41)], &mut StdPrint).unwrap() {
+/// let snapshot = RunSnapshot::new("x + 1".to_owned(), "test.py", vec!["x".to_owned()], vec![]).unwrap();
+/// match snapshot.run_snapshot(vec![PyObject::Int(41)], NoLimitTracker::default(), &mut StdPrint).unwrap() {
 ///     RunProgress::Complete(result) => assert_eq!(result, PyObject::Int(42)),
 ///     _ => panic!("unexpected function call"),
 /// }
@@ -51,7 +51,7 @@ impl RunSnapshot {
     /// Creates a new run snapshot by parsing the given code.
     ///
     /// This only parses and prepares the code - no heap or namespaces are created yet.
-    /// Call `run_no_limits()` or `run_with_limits()` with inputs to start execution.
+    /// Call `run_snapshot()` with inputs to start execution.
     ///
     /// # Arguments
     /// * `code` - The Python code to execute
@@ -63,53 +63,35 @@ impl RunSnapshot {
     pub fn new(
         code: String,
         filename: &str,
-        input_names: &[&str],
+        input_names: Vec<String>,
         external_functions: Vec<String>,
     ) -> Result<Self, PythonException> {
         Executor::new_internal(code, filename, input_names, external_functions).map(|executor| Self { executor })
     }
 
-    /// Starts execution with the given inputs and no resource tracker, consuming self.
-    ///
-    /// Creates the heap and namespaces, then begins execution.
-    ///
-    /// # Arguments
-    /// * `inputs` - Initial input values (must match length of `input_names` from `new()`)
-    ///
-    /// # Errors
-    /// Returns `PythonException` if:
-    /// - The number of inputs doesn't match the expected count
-    /// - An input value is invalid (e.g., `PyObject::Repr`)
-    /// - A runtime error occurs during execution
-    pub fn run_no_limits(
-        self,
-        inputs: Vec<PyObject>,
-        print: &mut impl PrintWriter,
-    ) -> Result<RunProgress<NoLimitTracker>, PythonException> {
-        self.run_with_tracker(inputs, NoLimitTracker::default(), print)
+    /// Returns the code that was parsed to create this snapshot.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        self.executor.code()
     }
 
-    /// Starts execution with the given inputs and resource limits, consuming self.
+    /// Executes the code to completion assuming not external functions or snapshotting.
     ///
-    /// Creates the heap and namespaces, then begins execution.
+    /// This is marginally faster than running with snapshotting enabled since we don't need
+    /// to track the position in code, but does not allow calling of external functions.
     ///
     /// # Arguments
-    /// * `inputs` - Initial input values (must match length of `input_names` from `new()`)
-    /// * `limits` - Resource limits for the execution
+    /// * `inputs` - Values to fill the first N slots of the namespace
+    /// * `resource_tracker` - Custom resource tracker implementation
+    /// * `print` - print print implementation
     ///
-    /// # Errors
-    /// Returns `PythonException` if:
-    /// - The number of inputs doesn't match the expected count
-    /// - An input value is invalid (e.g., `PyObject::Repr`)
-    /// - A runtime error occurs during execution
-    pub fn run_with_limits(
-        self,
+    pub fn run_no_snapshot(
+        &self,
         inputs: Vec<PyObject>,
-        limits: ResourceLimits,
+        resource_tracker: impl ResourceTracker,
         print: &mut impl PrintWriter,
-    ) -> Result<RunProgress<LimitedTracker>, PythonException> {
-        let resource_tracker = LimitedTracker::new(limits);
-        self.run_with_tracker(inputs, resource_tracker, print)
+    ) -> Result<PyObject, PythonException> {
+        self.executor.run_with_tracker(inputs, resource_tracker, print)
     }
 
     /// Starts execution with the given inputs and resource tracker, consuming self.
@@ -126,7 +108,7 @@ impl RunSnapshot {
     /// - The number of inputs doesn't match the expected count
     /// - An input value is invalid (e.g., `PyObject::Repr`)
     /// - A runtime error occurs during execution
-    pub fn run_with_tracker<T: ResourceTracker>(
+    pub fn run_snapshot<T: ResourceTracker>(
         self,
         inputs: Vec<PyObject>,
         resource_tracker: T,
@@ -251,7 +233,7 @@ impl<T: ResourceTracker> Snapshot<T> {
 /// Lower level interface to parse code and run it to completion.
 ///
 /// This interface does not allow for external functions to be called with its public API, so
-/// most applications should use [`RunSnapshot`] instead.s
+/// most applications should use [`RunSnapshot`] instead.
 ///
 /// The executor stores the compiled AST and source code for error reporting.
 #[derive(Debug, Clone)]
@@ -282,14 +264,18 @@ impl Executor {
     ///
     /// # Errors
     /// Returns `PythonException` if the code cannot be parsed.
-    pub fn new(code: String, filename: &str, input_names: &[&str]) -> Result<Self, PythonException> {
+    pub fn new(code: String, filename: &str, input_names: Vec<String>) -> Result<Self, PythonException> {
         Self::new_internal(code, filename, input_names, vec![])
+    }
+
+    fn code(&self) -> &str {
+        &self.code
     }
 
     fn new_internal(
         code: String,
         filename: &str,
-        input_names: &[&str],
+        input_names: Vec<String>,
         external_functions: Vec<String>,
     ) -> Result<Self, PythonException> {
         let parse_result = parse(&code, filename).map_err(|e| e.into_python_exc(filename, &code))?;
@@ -319,10 +305,9 @@ impl Executor {
     ///
     /// # Example
     /// ```
-    /// use std::time::Duration;
     /// use monty::Executor;
     ///
-    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", &[]).unwrap();
+    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", vec![]).unwrap();
     /// let py_object = ex.run_no_limits(vec![]).unwrap();
     /// assert_eq!(py_object, monty::PyObject::Int(3));
     /// ```
@@ -346,7 +331,7 @@ impl Executor {
     /// let limits = ResourceLimits::new()
     ///     .max_allocations(1000)
     ///     .max_duration(Duration::from_secs(5));
-    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", &[]).unwrap();
+    /// let ex = Executor::new("1 + 2".to_owned(), "test.py", vec![]).unwrap();
     /// let py_object = ex.run_with_limits(vec![], limits).unwrap();
     /// assert_eq!(py_object, PyObject::Int(3));
     /// ```

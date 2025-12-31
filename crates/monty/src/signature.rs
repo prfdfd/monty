@@ -430,7 +430,7 @@ impl Signature {
                 let matching_param = args
                     .iter()
                     .enumerate()
-                    .find(|(_, &param_id)| keyword_name.matches(param_id, interns));
+                    .find(|&(_, param_id)| keyword_name.matches(*param_id, interns));
                 if let Some((i, &param_id)) = matching_param {
                     let idx = pos_param_count + i;
                     if bound_params[idx] {

@@ -11,6 +11,7 @@ on:
 env:
   COLUMNS: 150
   UV_PYTHON: "3.14"
+  UV_FROZEN: "1"
 
 jobs:
   lint:
@@ -24,9 +25,9 @@ jobs:
           components: rustfmt, clippy
 
       - uses: astral-sh/setup-uv@v7
-      - run: uv sync
+      - run: uv sync --all-packages --only-dev
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pre-commit
           key: pre-commit|${{ env.UV_PYTHON }}|${{ hashFiles('.pre-commit-config.yaml') }}
@@ -34,7 +35,7 @@ jobs:
         env:
           SKIP: test
 
-  test:
+  test-rust:
     runs-on: ubuntu-latest
 
     steps:
@@ -52,16 +53,33 @@ jobs:
         # don't use .venv python in CI
       - run: rm .cargo/config.toml
 
-      - name: Test without ref-count-return feature or ref-count-panic
-        run: cargo test --workspace
+      # run rust tests in all flavors
+      - run: make test-no-features
+      - run: make test-ref-count-panic
+      - run: make test-ref-count-return
 
-      - name: Test with ref-count-return feature
-        run: cargo test --workspace --features ref-count-return
+  test-python:
+    name: test python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
 
-      - name: Test with ref-count-panic feature
-        run: cargo test --workspace --features ref-count-panic
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
-  bench:
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v7
+
+      - run: uv sync --all-packages --only-dev
+      - run: make dev-py
+      - run: make test-py
+
+  bench-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -80,7 +98,7 @@ jobs:
   # https://github.com/marketplace/actions/alls-green#why used for branch protection checks
   check:
     if: always()
-    needs: [lint, test, bench]
+    needs: [lint, test-rust, test-python, bench-test]
     runs-on: ubuntu-latest
     steps:
       - name: Decide whether the needed jobs succeeded or failed

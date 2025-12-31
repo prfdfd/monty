@@ -85,7 +85,7 @@ pub enum PyObject {
     /// Python tuple (immutable sequence).
     Tuple(Vec<PyObject>),
     /// Python dictionary (insertion-ordered mapping).
-    Dict(IndexMap<PyObject, PyObject>),
+    Dict(DictPairs),
     /// Python set (mutable, unordered collection of unique elements).
     Set(Vec<PyObject>),
     /// Python frozenset (immutable, unordered collection of unique elements).
@@ -141,6 +141,11 @@ impl PyObject {
         py_obj
     }
 
+    /// Creates a new `PyObject` from something that can be converted into a `DictPairs`.
+    pub fn dict(dict: impl Into<DictPairs>) -> Self {
+        Self::Dict(dict.into())
+    }
+
     /// Converts this `PyObject` into an `Value`, allocating on the heap if needed.
     ///
     /// Immediate values (None, Bool, Int, Float, Ellipsis, Exception) are created directly.
@@ -182,9 +187,8 @@ impl PyObject {
                     .into_iter()
                     .map(|(k, v)| Ok((k.to_value(heap, interns)?, v.to_value(heap, interns)?)))
                     .collect();
-                // PyObject Dict keys are already validated as hashable, so unwrap is safe
-                let dict =
-                    Dict::from_pairs(pairs?, heap, interns).expect("PyObject Dict should only contain hashable keys");
+                let dict = Dict::from_pairs(pairs?, heap, interns)
+                    .map_err(|_| InvalidInputError::invalid_type("unhashable dict keys"))?;
                 Ok(Value::Ref(heap.allocate(HeapData::Dict(dict))?))
             }
             Self::Set(items) => {
@@ -273,16 +277,16 @@ impl PyObject {
                             .map(|obj| PyObject::from_value_inner(obj, heap, visited, interns))
                             .collect(),
                     ),
-                    HeapData::Dict(dict) => {
-                        let mut new_dict = IndexMap::with_capacity(dict.len());
-                        for (k, v) in dict {
-                            new_dict.insert(
-                                PyObject::from_value_inner(k, heap, visited, interns),
-                                PyObject::from_value_inner(v, heap, visited, interns),
-                            );
-                        }
-                        Self::Dict(new_dict)
-                    }
+                    HeapData::Dict(dict) => Self::Dict(DictPairs(
+                        dict.into_iter()
+                            .map(|(k, v)| {
+                                (
+                                    PyObject::from_value_inner(k, heap, visited, interns),
+                                    PyObject::from_value_inner(v, heap, visited, interns),
+                                )
+                            })
+                            .collect(),
+                    )),
                     HeapData::Set(set) => Self::Set(
                         set.storage()
                             .iter()
@@ -703,16 +707,15 @@ impl Serialize for PyObject {
             Self::Float(f) => serializer.serialize_f64(*f),
             Self::String(s) => serializer.serialize_str(s),
             Self::List(items) => items.serialize(serializer),
-            Self::Dict(map) => {
+            Self::Dict(pairs) => {
                 // Serialize as JSON object with string keys
-                let mut map_ser = serializer.serialize_map(Some(map.len()))?;
-                for (k, v) in map {
+                let mut map_ser = serializer.serialize_map(Some(pairs.len()))?;
+                for (k, v) in pairs {
                     // Extract string key or convert to repr for non-string keys
-                    let key_str = match k {
-                        Self::String(s) => s.clone(),
-                        other => other.py_repr(),
-                    };
-                    map_ser.serialize_entry(&key_str, v)?;
+                    match k {
+                        Self::String(s) => map_ser.serialize_entry(s, v)?,
+                        other => map_ser.serialize_entry(&other.py_repr(), v)?,
+                    }
                 }
                 map_ser.end()
             }
@@ -878,10 +881,72 @@ impl<'de> Visitor<'de> for PyObjectVisitor {
     where
         A: MapAccess<'de>,
     {
-        let mut dict = IndexMap::new();
+        let mut pairs = Vec::new();
         while let Some((key, value)) = map.next_entry::<String, PyObject>()? {
-            dict.insert(PyObject::String(key), value);
+            pairs.push((PyObject::String(key), value));
         }
-        Ok(PyObject::Dict(dict))
+        Ok(PyObject::Dict(pairs.into()))
+    }
+}
+
+/// A collection of key-value pairs representing Python dictionary contents.
+///
+/// Used internally by `PyObject::Dict` to store dictionary entries while preserving
+/// insertion order. Keys and values are both `PyObject` instances.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DictPairs(Vec<(PyObject, PyObject)>);
+
+impl From<Vec<(PyObject, PyObject)>> for DictPairs {
+    fn from(pairs: Vec<(PyObject, PyObject)>) -> Self {
+        DictPairs(pairs)
+    }
+}
+
+impl From<IndexMap<PyObject, PyObject>> for DictPairs {
+    fn from(map: IndexMap<PyObject, PyObject>) -> Self {
+        DictPairs(map.into_iter().collect())
+    }
+}
+
+impl From<DictPairs> for IndexMap<PyObject, PyObject> {
+    fn from(pairs: DictPairs) -> Self {
+        pairs.into_iter().collect()
+    }
+}
+
+impl IntoIterator for DictPairs {
+    type Item = (PyObject, PyObject);
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a DictPairs {
+    type Item = &'a (PyObject, PyObject);
+    type IntoIter = std::slice::Iter<'a, (PyObject, PyObject)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl FromIterator<(PyObject, PyObject)> for DictPairs {
+    fn from_iter<T: IntoIterator<Item = (PyObject, PyObject)>>(iter: T) -> Self {
+        DictPairs(iter.into_iter().collect())
+    }
+}
+
+impl DictPairs {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &(PyObject, PyObject)> {
+        self.0.iter()
     }
 }

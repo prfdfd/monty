@@ -42,7 +42,7 @@ pub struct PrepareResult {
 /// At module level, the local namespace IS the global namespace.
 pub(crate) fn prepare(
     parse_result: ParseResult,
-    input_names: &[&str],
+    input_names: Vec<String>,
     external_functions: &[String],
 ) -> Result<PrepareResult, ParseError> {
     let ParseResult { nodes, interner } = parse_result;
@@ -136,7 +136,7 @@ impl<'i> Prepare<'i> {
     /// * `interner` - Reference to the string interner for looking up names
     /// * `functions` - Reference to the functions container
     fn new_module(
-        input_names: &[&str],
+        input_names: Vec<String>,
         external_functions: &[String],
         interner: &'i InternerBuilder,
         functions: &'i mut Vec<Function>,
@@ -145,8 +145,8 @@ impl<'i> Prepare<'i> {
         for (index, name) in external_functions.iter().enumerate() {
             name_map.insert(name.clone(), NamespaceId::new(index));
         }
-        for (index, name) in input_names.iter().enumerate() {
-            name_map.insert((*name).to_string(), NamespaceId::new(external_functions.len() + index));
+        for (index, name) in input_names.into_iter().enumerate() {
+            name_map.insert(name, NamespaceId::new(external_functions.len() + index));
         }
         let namespace_size = name_map.len();
         Self {

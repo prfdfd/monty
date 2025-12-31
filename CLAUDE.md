@@ -14,17 +14,20 @@ Project goals:
 - **Snapshotting and iteration**: Plan is to allow code to be iteratively executed and snapshotted at each function call
 - Targets the latest stable version of Python, currently Python 3.14
 
-## Build Commands
+## Dev Commands
 
 ```bash
-# format python and rust code
-make format
-
 # lint python and rust code
 make lint
 
-# Build the project
-cargo build
+# lint just rust code
+make lint-rs
+
+# lint just python code
+make lint-py
+
+# format python and rust code
+make format
 ```
 
 ## Exception
@@ -79,7 +82,7 @@ make test
 cargo test --features ref-count-panic str__ops
 
 # Run the interpreter on a Python file
-cargo run -- <file.py>
+cargo run -p monty-cli -- <file.py>
 ```
 
 ### Test File Structure
@@ -188,6 +191,50 @@ NEVER MARK TESTS AS XFAIL UNDER ANY CIRCUMSTANCES!!!
 - Run `make lint-py` after adding tests
 - Use `make complete-tests` to fill in blank expectations
 - Tests run via `datatest-stable` harness in `tests/datatest_runner.rs`
+
+## Python Package (`monty-python`)
+
+The Python package provides Python bindings for the Monty interpreter, located in `crates/monty-python/`.
+
+### Structure
+
+- `crates/monty-python/src/` - Rust source for PyO3 bindings
+- `crates/monty-python/monty.pyi` - Type stubs for the Python module
+- `crates/monty-python/tests/` - Python tests using pytest
+
+### Building and Testing
+
+Dependencies needed for python testing are installed in `crates/monty-python/pyproject.toml`.
+To install these dependencies, use `uv sync --all-packages --only-dev`.
+
+```bash
+# Build the Python package for development (required before running tests)
+make dev-py
+
+# Run Python tests
+make test-py
+
+# Or run pytest directly (after dev-py)
+uv run pytest
+
+# Run a specific test file
+uv run pytest crates/monty-python/tests/test_basic.py
+
+# Run a specific test
+uv run pytest crates/monty-python/tests/test_basic.py::test_simple_expression
+```
+
+### Python Test Guidelines
+
+Check and follow the style of other python tests.
+
+Make sure you put tests in the correct file.
+
+**NEVER use class-based tests.** All tests should be simple functions.
+
+Use `@pytest.mark.parametrize` whenever testing multiple similar cases.
+
+Use `snapshot` from `inline-snapshot` for all test asserts.
 
 ## Reference Counting
 

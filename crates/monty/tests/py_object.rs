@@ -1,4 +1,3 @@
-use indexmap::IndexMap;
 use monty::PyObject;
 
 /// Tests for `PyObject::is_truthy()` - Python's truth value testing rules.
@@ -91,14 +90,13 @@ fn is_truthy_nonempty_tuple_is_truthy() {
 
 #[test]
 fn is_truthy_empty_dict_is_falsy() {
-    assert!(!PyObject::Dict(IndexMap::new()).is_truthy());
+    assert!(!PyObject::dict(vec![]).is_truthy());
 }
 
 #[test]
 fn is_truthy_nonempty_dict_is_truthy() {
-    let mut dict = IndexMap::new();
-    dict.insert(PyObject::String("key".to_string()), PyObject::Int(1));
-    assert!(PyObject::Dict(dict).is_truthy());
+    let dict = vec![(PyObject::String("key".to_string()), PyObject::Int(1))];
+    assert!(PyObject::dict(dict).is_truthy());
 }
 
 /// Tests for `PyObject::type_name()` - Python type names.
@@ -119,5 +117,5 @@ fn type_name() {
     assert_eq!(PyObject::Bytes(vec![1, 2, 3]).type_name(), "bytes");
     assert_eq!(PyObject::List(vec![]).type_name(), "list");
     assert_eq!(PyObject::Tuple(vec![]).type_name(), "tuple");
-    assert_eq!(PyObject::Dict(IndexMap::new()).type_name(), "dict");
+    assert_eq!(PyObject::dict(vec![]).type_name(), "dict");
 }
