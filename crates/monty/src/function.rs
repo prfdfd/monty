@@ -138,10 +138,15 @@ impl Function {
         interns: &Interns,
         print: &mut impl PrintWriter,
     ) -> RunResult<Value> {
+        // Create a new local namespace for this function call (with memory and recursion tracking)
+        // For resource errors (recursion, memory), we don't attach a frame here - the caller
+        // will add the call site frame as the error propagates up, which is what we want.
+        let local_idx = namespaces.new_namespace(self.namespace_size, heap)?;
+        let namespace = namespaces.get_mut(local_idx).mut_vec();
+
         // 1. Bind arguments to parameters
-        let mut namespace = self
-            .signature
-            .bind(args, defaults, heap, interns, self.name, self.namespace_size)?;
+        self.signature
+            .bind(args, defaults, heap, interns, self.name, namespace)?;
 
         // 2. Push cell_var refs (slots param_count..param_count+cell_var_count)
         // These are cells for variables that nested functions capture from us
@@ -155,13 +160,6 @@ impl Function {
         // 4. Fill remaining slots with Undefined for local variables
         namespace.resize_with(self.namespace_size, || Value::Undefined);
 
-        // Create a new local namespace for this function call (with memory and recursion tracking)
-        // For resource errors (recursion, memory), we don't attach a frame here - the caller
-        // will add the call site frame as the error propagates up, which is what we want.
-        let local_idx = namespaces
-            .push_with_heap(namespace, heap)
-            .map_err(|e| RunError::UncatchableExc(e.into_exception(None)))?;
-
         // Execute the function body in a new frame
         let mut p = NoSnapshotTracker;
         let mut frame = RunFrame::function_frame(local_idx, self.name.name_id, interns, &mut p, print);
@@ -169,7 +167,7 @@ impl Function {
         let result = frame.execute(namespaces, heap, &self.body);
 
         // Clean up the function's namespace (properly decrementing ref counts)
-        namespaces.pop_with_heap(heap);
+        namespaces.drop_with_heap(local_idx, heap);
 
         map_result(result)
     }
@@ -198,10 +196,15 @@ impl Function {
         interns: &Interns,
         print: &mut impl PrintWriter,
     ) -> RunResult<Value> {
+        // Create a new local namespace for this function call (with memory and recursion tracking)
+        // For resource errors (recursion, memory), we don't attach a frame here - the caller
+        // will add the call site frame as the error propagates up, which is what we want.
+        let local_idx = namespaces.new_namespace(self.namespace_size, heap)?;
+        let namespace = namespaces.get_mut(local_idx).mut_vec();
+
         // 1. Bind arguments to parameters
-        let mut namespace = self
-            .signature
-            .bind(args, defaults, heap, interns, self.name, self.namespace_size)?;
+        self.signature
+            .bind(args, defaults, heap, interns, self.name, namespace)?;
 
         // 2. Push cell_var refs (slots param_count..param_count+cell_var_count)
         // A closure can also have cell_vars if it has nested functions
@@ -220,11 +223,6 @@ impl Function {
         // 4. Fill remaining slots with Undefined for local variables
         namespace.resize_with(self.namespace_size, || Value::Undefined);
 
-        // Create a new local namespace for this function call (with memory and recursion tracking)
-        // For resource errors (recursion, memory), we don't attach a frame here - the caller
-        // will add the call site frame as the error propagates up, which is what we want.
-        let local_idx = namespaces.push_with_heap(namespace, heap)?;
-
         // Execute the function body in a new frame
         let mut p = NoSnapshotTracker;
         let mut frame = RunFrame::function_frame(local_idx, self.name.name_id, interns, &mut p, print);
@@ -232,7 +230,7 @@ impl Function {
         let result = frame.execute(namespaces, heap, &self.body);
 
         // Clean up the function's namespace (properly decrementing ref counts)
-        namespaces.pop_with_heap(heap);
+        namespaces.drop_with_heap(local_idx, heap);
 
         map_result(result)
     }

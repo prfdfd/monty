@@ -6,13 +6,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use std::ffi::CString;
 
-/// Benchmarks adding two numbers using Monty interpreter
-fn add_two_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new("1 + 2".to_owned(), "test.py", vec![], vec![]).unwrap();
-
+/// Runs a benchmark using the Monty interpreter.
+/// Parses once, then benchmarks repeated execution.
+fn run_monty(bench: &mut Bencher, code: &str, expected: i64) {
+    let ex = MontyRun::new(code.to_owned(), "test.py", vec![], vec![]).unwrap();
     let r = ex.run_no_limits(vec![]).unwrap();
     let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 3);
+    assert_eq!(int_value, expected);
 
     bench.iter(|| {
         let r = ex.run_no_limits(vec![]).unwrap();
@@ -21,25 +21,21 @@ fn add_two_monty(bench: &mut Bencher) {
     });
 }
 
-/// Benchmarks adding two numbers using CPython
-fn add_two_cpython(bench: &mut Bencher) {
+/// Runs a benchmark using CPython.
+/// Wraps code in main(), parses once, then benchmarks repeated execution.
+fn run_cpython(bench: &mut Bencher, code: &str, expected: i64) {
     Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            c"def main():
-                return 1 + 2
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
+        let wrapped = wrap_for_cpython(code);
+        let code_cstr = CString::new(wrapped).expect("Invalid C string in code");
+        let fun: Py<PyAny> = PyModule::from_code(py, &code_cstr, c"test.py", c"main")
+            .unwrap()
+            .getattr("main")
+            .unwrap()
+            .into();
 
         let r_py = fun.call0(py).unwrap();
         let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 3);
+        assert_eq!(r, expected);
 
         bench.iter(|| {
             let r_py = fun.call0(py).unwrap();
@@ -49,219 +45,8 @@ fn add_two_cpython(bench: &mut Bencher) {
     });
 }
 
-fn dict_set_get_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(
-        "
-a = {}
-a['key'] = 'value'
-a['key']
-        "
-        .to_owned(),
-        "test.py",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let value: String = r.as_ref().try_into().unwrap();
-    assert_eq!(value, "value");
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let value: String = r.as_ref().try_into().unwrap();
-        black_box(value);
-    });
-}
-
-fn dict_set_get_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            c"def main():
-                a = {}
-                a['key'] = 'value'
-                return a['key']
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r_py = fun.call0(py).unwrap();
-        let r: String = r_py.extract(py).unwrap();
-        assert_eq!(r, "value");
-
-        bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: String = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-fn list_append_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(
-        "
-a = []
-a.append(42)
-a[0]
-        "
-        .to_owned(),
-        "test.py",
-        vec![],
-        vec![],
-    )
-    .unwrap();
-
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(value, 42);
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let value: i64 = r.as_ref().try_into().unwrap();
-        black_box(value);
-    });
-}
-
-/// Benchmarks adding two numbers using CPython
-fn list_append_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            c"def main():
-                a = []
-                a.append(42)
-                return a[0]
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r_py = fun.call0(py).unwrap();
-        let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 42);
-
-        bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-// language=Python
-const LOOP_MOD_13_CODE: &str = "
-v = ''
-for i in range(1_000):
-    if i % 13 == 0:
-        v += 'x'
-len(v)
-";
-
-/// Benchmarks a loop with modulo operations using Monty interpreter
-fn loop_mod_13_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(LOOP_MOD_13_CODE.to_owned(), "test.py", vec![], vec![]).unwrap();
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 77);
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let int_value: i64 = r.as_ref().try_into().unwrap();
-        black_box(int_value);
-    });
-}
-
-/// Benchmarks a loop with modulo operations using CPython
-fn loop_mod_13_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            // language=Python
-            c"def main():
-                v = ''
-                for i in range(1_000):
-                    if i % 13 == 0:
-                        v += 'x'
-                return len(v)
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r = fun.call0(py).unwrap();
-        let r: i64 = r.extract(py).unwrap();
-        assert_eq!(r, 77);
-
-        bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-/// Benchmarks end-to-end execution (parsing + running) using Monty
-fn end_to_end_monty(bench: &mut Bencher) {
-    bench.iter(|| {
-        let ex = MontyRun::new(black_box("1 + 2").to_owned(), "test.py", vec![], vec![]).unwrap();
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let int_value: i64 = r.as_ref().try_into().unwrap();
-        black_box(int_value);
-    });
-}
-
-/// Benchmarks end-to-end execution (parsing + running) using CPython
-fn end_to_end_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        bench.iter(|| {
-            let fun: Py<PyAny> =
-                PyModule::from_code(py, black_box(c"def main():\n  return 1 + 2"), c"test.py", c"main")
-                    .unwrap()
-                    .getattr("main")
-                    .unwrap()
-                    .into();
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-/// Comprehensive benchmark exercising most supported Python features in one test.
-/// Code is shared with test_cases/bench__kitchen_sink.py
-/// Expected result: 3 + 1 + 10 + 1 + 1 + 3 + 11 + 7 + 21 = 58
-const KITCHEN_SINK_CODE: &str = include_str!("../test_cases/bench__kitchen_sink.py");
-
-/// Benchmarks comprehensive feature coverage using Monty interpreter
-fn kitchen_sink_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(KITCHEN_SINK_CODE.to_owned(), "test.py", vec![], vec![]).unwrap();
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 58);
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let int_value: i64 = r.as_ref().try_into().unwrap();
-        black_box(int_value);
-    });
-}
-
-/// Wraps test case code in a function for CPython execution.
-/// Filters out test metadata comments and adds proper indentation.
+/// Wraps code in a main() function for CPython execution.
+/// Indents each line and converts the last expression to a return statement.
 fn wrap_for_cpython(code: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut last_expr = String::new();
@@ -287,183 +72,78 @@ fn wrap_for_cpython(code: &str) -> String {
     format!("def main():\n{}", lines.join("\n"))
 }
 
-/// Benchmarks comprehensive feature coverage using CPython
-fn kitchen_sink_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let code = wrap_for_cpython(KITCHEN_SINK_CODE);
-        let code_cstr = CString::new(code).expect("Invalid C string in code");
-        let fun: Py<PyAny> = PyModule::from_code(py, &code_cstr, c"test.py", c"main")
-            .unwrap()
-            .getattr("main")
-            .unwrap()
-            .into();
+const ADD_TWO: &str = "1 + 2";
 
-        let r_py = fun.call0(py).unwrap();
-        let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 58);
+const LIST_APPEND: &str = "
+a = []
+a.append(42)
+a[0]
+";
 
-        bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
+const LOOP_MOD_13: &str = "
+v = ''
+for i in range(1_000):
+    if i % 13 == 0:
+        v += 'x'
+len(v)
+";
 
-// language=Python
-const FUNC_CALL_KWARGS_CODE: &str = "
+/// Comprehensive benchmark exercising most supported Python features.
+/// Code is shared with test_cases/bench__kitchen_sink.py
+const KITCHEN_SINK: &str = include_str!("../test_cases/bench__kitchen_sink.py");
+
+const FUNC_CALL_KWARGS: &str = "
 def add(a, b=2):
     return a + b
 
 add(a=1)
 ";
 
-// language=Python
-const LIST_APPEND_STR_CODE: &str = "
+const LIST_APPEND_STR: &str = "
 a = []
 for i in range(100_000):
     a.append(str(i))
 len(a)
 ";
 
-// language=Python
-const LIST_APPEND_INT_CODE: &str = "
+const LIST_APPEND_INT: &str = "
 a = []
 for i in range(100_000):
     a.append(i)
 sum(a)
 ";
 
-/// Benchmarks function call with keyword arguments using Monty interpreter
-fn func_call_kwargs_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(FUNC_CALL_KWARGS_CODE.to_owned(), "test.py", vec![], vec![]).unwrap();
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 3);
+const FIB_25: &str = "
+def fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
 
+fib(25)
+";
+
+/// Benchmarks end-to-end execution (parsing + running) using Monty.
+/// This is different from other benchmarks as it includes parsing in the loop.
+fn end_to_end_monty(bench: &mut Bencher) {
     bench.iter(|| {
+        let ex = MontyRun::new(black_box("1 + 2").to_owned(), "test.py", vec![], vec![]).unwrap();
         let r = ex.run_no_limits(vec![]).unwrap();
         let int_value: i64 = r.as_ref().try_into().unwrap();
         black_box(int_value);
     });
 }
 
-/// Benchmarks function call with keyword arguments using CPython
-fn func_call_kwargs_cpython(bench: &mut Bencher) {
+/// Benchmarks end-to-end execution (parsing + running) using CPython.
+/// This is different from other benchmarks as it includes parsing in the loop.
+fn end_to_end_cpython(bench: &mut Bencher) {
     Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            // language=Python
-            c"def main():
-                def add(a, b=2):
-                    return a + b
-                return add(a=1)
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r_py = fun.call0(py).unwrap();
-        let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 3);
-
         bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-/// Benchmarks list append with str(i) conversion using Monty interpreter
-fn list_append_str_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(LIST_APPEND_STR_CODE.to_owned(), "test.py", vec![], vec![]).unwrap();
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 100_000);
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let int_value: i64 = r.as_ref().try_into().unwrap();
-        black_box(int_value);
-    });
-}
-
-/// Benchmarks list append with str(i) conversion using CPython
-fn list_append_str_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            // language=Python
-            c"def main():
-                a = []
-                for i in range(100_000):
-                    a.append(str(i))
-                return len(a)
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r_py = fun.call0(py).unwrap();
-        let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 100_000);
-
-        bench.iter(|| {
-            let r_py = fun.call0(py).unwrap();
-            let r: i64 = r_py.extract(py).unwrap();
-            black_box(r);
-        });
-    });
-}
-
-/// Benchmarks list append with int (no str conversion) using Monty interpreter
-fn list_append_int_monty(bench: &mut Bencher) {
-    let ex = MontyRun::new(LIST_APPEND_INT_CODE.to_owned(), "test.py", vec![], vec![]).unwrap();
-    let r = ex.run_no_limits(vec![]).unwrap();
-    let int_value: i64 = r.as_ref().try_into().unwrap();
-    assert_eq!(int_value, 4_999_950_000);
-
-    bench.iter(|| {
-        let r = ex.run_no_limits(vec![]).unwrap();
-        let int_value: i64 = r.as_ref().try_into().unwrap();
-        black_box(int_value);
-    });
-}
-
-/// Benchmarks list append with int (no str conversion) using CPython
-fn list_append_int_cpython(bench: &mut Bencher) {
-    Python::attach(|py| {
-        let fun: Py<PyAny> = PyModule::from_code(
-            py,
-            // language=Python
-            c"def main():
-                a = []
-                for i in range(100_000):
-                    a.append(i)
-                return sum(a)
-            ",
-            c"test.py",
-            c"main",
-        )
-        .unwrap()
-        .getattr("main")
-        .unwrap()
-        .into();
-
-        let r_py = fun.call0(py).unwrap();
-        let r: i64 = r_py.extract(py).unwrap();
-        assert_eq!(r, 4_999_950_000);
-
-        bench.iter(|| {
+            let fun: Py<PyAny> =
+                PyModule::from_code(py, black_box(c"def main():\n  return 1 + 2"), c"test.py", c"main")
+                    .unwrap()
+                    .getattr("main")
+                    .unwrap()
+                    .into();
             let r_py = fun.call0(py).unwrap();
             let r: i64 = r_py.extract(py).unwrap();
             black_box(r);
@@ -474,23 +154,18 @@ fn list_append_int_cpython(bench: &mut Bencher) {
 /// Configures all benchmark groups
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("add_two");
-    group.bench_function("monty", add_two_monty);
-    group.bench_function("cpython", add_two_cpython);
-    group.finish();
-
-    let mut group = c.benchmark_group("dict_set_get");
-    group.bench_function("monty", dict_set_get_monty);
-    group.bench_function("cpython", dict_set_get_cpython);
+    group.bench_function("monty", |b| run_monty(b, ADD_TWO, 3));
+    group.bench_function("cpython", |b| run_cpython(b, ADD_TWO, 3));
     group.finish();
 
     let mut group = c.benchmark_group("list_append");
-    group.bench_function("monty", list_append_monty);
-    group.bench_function("cpython", list_append_cpython);
+    group.bench_function("monty", |b| run_monty(b, LIST_APPEND, 42));
+    group.bench_function("cpython", |b| run_cpython(b, LIST_APPEND, 42));
     group.finish();
 
     let mut group = c.benchmark_group("loop_mod_13");
-    group.bench_function("monty", loop_mod_13_monty);
-    group.bench_function("cpython", loop_mod_13_cpython);
+    group.bench_function("monty", |b| run_monty(b, LOOP_MOD_13, 77));
+    group.bench_function("cpython", |b| run_cpython(b, LOOP_MOD_13, 77));
     group.finish();
 
     let mut group = c.benchmark_group("end_to_end");
@@ -499,23 +174,28 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("kitchen_sink");
-    group.bench_function("monty", kitchen_sink_monty);
-    group.bench_function("cpython", kitchen_sink_cpython);
+    group.bench_function("monty", |b| run_monty(b, KITCHEN_SINK, 58));
+    group.bench_function("cpython", |b| run_cpython(b, KITCHEN_SINK, 58));
     group.finish();
 
     let mut group = c.benchmark_group("func_call_kwargs");
-    group.bench_function("monty", func_call_kwargs_monty);
-    group.bench_function("cpython", func_call_kwargs_cpython);
+    group.bench_function("monty", |b| run_monty(b, FUNC_CALL_KWARGS, 3));
+    group.bench_function("cpython", |b| run_cpython(b, FUNC_CALL_KWARGS, 3));
     group.finish();
 
     let mut group = c.benchmark_group("list_append_str");
-    group.bench_function("monty", list_append_str_monty);
-    group.bench_function("cpython", list_append_str_cpython);
+    group.bench_function("monty", |b| run_monty(b, LIST_APPEND_STR, 100_000));
+    group.bench_function("cpython", |b| run_cpython(b, LIST_APPEND_STR, 100_000));
     group.finish();
 
     let mut group = c.benchmark_group("list_append_int");
-    group.bench_function("monty", list_append_int_monty);
-    group.bench_function("cpython", list_append_int_cpython);
+    group.bench_function("monty", |b| run_monty(b, LIST_APPEND_INT, 4_999_950_000));
+    group.bench_function("cpython", |b| run_cpython(b, LIST_APPEND_INT, 4_999_950_000));
+    group.finish();
+
+    let mut group = c.benchmark_group("fib");
+    group.bench_function("monty", |b| run_monty(b, FIB_25, 75_025));
+    group.bench_function("cpython", |b| run_cpython(b, FIB_25, 75_025));
     group.finish();
 }
 

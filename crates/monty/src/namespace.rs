@@ -30,6 +30,10 @@ pub const GLOBAL_NS_IDX: NamespaceId = NamespaceId(0);
 pub struct Namespace(Vec<Value>);
 
 impl Namespace {
+    fn with_capacity(capacity: usize) -> Self {
+        Namespace(Vec::with_capacity(capacity))
+    }
+
     pub fn get(&self, index: NamespaceId) -> &Value {
         &self.0[index.index()]
     }
@@ -46,8 +50,8 @@ impl Namespace {
         self.0[index.index()] = value;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &Value> {
-        self.0.iter()
+    pub fn mut_vec(&mut self) -> &mut Vec<Value> {
+        &mut self.0
     }
 }
 
@@ -78,6 +82,8 @@ impl IntoIterator for Namespace {
 #[derive(Debug)]
 pub struct Namespaces {
     stack: Vec<Namespace>,
+    /// if we have an old namespace to reuse, trace its id
+    reuse_ids: Vec<NamespaceId>,
     /// Return values from an external function call.
     /// Set when resuming after an external function call.
     ext_return_values: Vec<Value>,
@@ -97,6 +103,7 @@ impl Namespaces {
     pub fn new(namespace: Vec<Value>) -> Self {
         Self {
             stack: vec![Namespace(namespace)],
+            reuse_ids: vec![],
             ext_return_values: vec![],
             next_ext_return_value: 0,
         }
@@ -171,16 +178,16 @@ impl Namespaces {
     /// 2. Tracks namespace memory usage through the heap's `ResourceTracker`
     ///
     /// # Arguments
-    /// * `namespace` - The vector of local variable slots for the function
+    /// * `namespace_size` - Expected number of values in the namespace
     /// * `heap` - The heap, used to access the resource tracker for memory accounting
     ///
     /// # Returns
     /// * `Ok(NamespaceId)` - Index of the new namespace
     /// * `Err(ResourceError::Recursion)` - If adding this namespace would exceed recursion limit
     /// * `Err(ResourceError::Memory)` - If adding this namespace would exceed memory limits
-    pub fn push_with_heap(
+    pub fn new_namespace(
         &mut self,
-        namespace: Vec<Value>,
+        namespace_size: usize,
         heap: &mut Heap<impl ResourceTracker>,
     ) -> Result<NamespaceId, ResourceError> {
         // Check recursion depth BEFORE memory allocation (fail fast)
@@ -189,15 +196,19 @@ impl Namespaces {
         heap.tracker().check_recursion_depth(current_depth)?;
 
         // Track the memory used by this namespace's slots
-        let size = namespace.len() * std::mem::size_of::<Value>();
+        let size = namespace_size * std::mem::size_of::<Value>();
         heap.tracker_mut().on_allocate(|| size)?;
 
-        let idx = NamespaceId(self.stack.len().try_into().expect("NamespaceId overflow"));
-        self.stack.push(Namespace(namespace));
-        Ok(idx)
+        if let Some(reuse_id) = self.reuse_ids.pop() {
+            Ok(reuse_id)
+        } else {
+            let idx = NamespaceId::new(self.stack.len());
+            self.stack.push(Namespace::with_capacity(namespace_size));
+            Ok(idx)
+        }
     }
 
-    /// Removes the most recently added namespace (after function returns),
+    /// Voids the most recently added namespace (after function returns),
     /// properly cleaning up any heap-allocated values.
     ///
     /// This method:
@@ -206,17 +217,16 @@ impl Namespaces {
     ///
     /// # Panics
     /// Panics if attempting to pop the global namespace (index 0).
-    pub fn pop_with_heap(&mut self, heap: &mut Heap<impl ResourceTracker>) {
-        debug_assert!(self.stack.len() > 1, "cannot pop global namespace");
-        if let Some(namespace) = self.stack.pop() {
-            // Track the freed memory for this namespace
-            let size = namespace.0.len() * std::mem::size_of::<Value>();
-            heap.tracker_mut().on_free(|| size);
+    pub fn drop_with_heap(&mut self, namespace_id: NamespaceId, heap: &mut Heap<impl ResourceTracker>) {
+        let namespace = &mut self.stack[namespace_id.index()];
+        // Track the freed memory for this namespace
+        let size = namespace.0.len() * std::mem::size_of::<Value>();
+        heap.tracker_mut().on_free(|| size);
 
-            for value in namespace.0 {
-                value.drop_with_heap(heap);
-            }
+        for value in namespace.0.drain(..) {
+            value.drop_with_heap(heap);
         }
+        self.reuse_ids.push(namespace_id);
     }
 
     /// Cleans up the global namespace by dropping all values with proper ref counting.
@@ -375,6 +385,7 @@ impl Namespaces {
     pub fn iter_heap_ids(&self) -> impl Iterator<Item = HeapId> + '_ {
         self.stack.iter().flat_map(|namespace| {
             namespace
+                .0
                 .iter()
                 .filter_map(|value| if let Value::Ref(id) = value { Some(*id) } else { None })
         })
