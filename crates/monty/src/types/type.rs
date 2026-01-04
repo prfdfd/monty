@@ -14,7 +14,9 @@ use crate::value::Value;
 /// This enum is used both for type checking and as a callable constructor.
 /// When parsed from a string (e.g., "list", "dict"), it can be used to create
 /// new instances of that type.
-#[derive(Debug, Clone, Copy, Display, EnumString, IntoStaticStr, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Display, EnumString, IntoStaticStr, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[strum(serialize_all = "lowercase")]
 #[allow(clippy::enum_variant_names)]
 pub enum Type {

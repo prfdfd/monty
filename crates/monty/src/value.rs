@@ -32,7 +32,7 @@ use crate::types::{Dict, PyTrait, Type};
 /// bypass reference counting and cause memory leaks.
 ///
 /// NOTE: it's important to keep this size small to minimize memory overhead!
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     // Immediate values (stored inline, no heap allocation)
     Undefined,
@@ -1109,7 +1109,7 @@ impl EitherStr {
 ///
 /// Uses strum `Display` derive with lowercase serialization.
 /// The `Other(String)` variant is a fallback for unknown/dynamic attribute names.
-#[derive(Debug, Clone, Display)]
+#[derive(Debug, Clone, Display, serde::Serialize, serde::Deserialize)]
 #[strum(serialize_all = "lowercase")]
 pub enum Attr {
     // List methods

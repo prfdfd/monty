@@ -131,7 +131,7 @@ pub enum ParseNode {
     Try(Try<ParseNode>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Try<N> {
     pub body: Vec<N>,
     pub handlers: Vec<ExceptHandler<N>>,
@@ -143,7 +143,7 @@ pub struct Try<N> {
 ///
 /// Represents `except ExcType as name:` or bare `except:` clauses.
 /// The exception type and variable binding are both optional.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExceptHandler<N> {
     /// Exception type(s) to catch. None = bare except (catches all).
     pub exc_type: Option<ExprLoc>,
@@ -974,7 +974,7 @@ fn convert_conversion_flag(flag: RuffConversionFlag) -> ConversionFlag {
 /// extracting the preview line from source during traceback formatting.
 ///
 /// To display the filename, the caller must provide access to the string storage.
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CodeRange {
     /// Interned filename ID - look up in Interns to get the actual string.
     pub filename: StringId,

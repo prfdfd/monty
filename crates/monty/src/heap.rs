@@ -14,7 +14,7 @@ use crate::types::{Bytes, Dict, FrozenSet, List, PyTrait, Range, Set, Str, Tuple
 use crate::value::{Attr, Value};
 
 /// Unique identifier for values stored inside the heap arena.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct HeapId(usize);
 
 impl HeapId {
@@ -33,7 +33,7 @@ impl HeapId {
 ///
 /// Note: The `Value` variant is special - it wraps boxed immediate values
 /// that need heap identity (e.g., when `id()` is called on an int).
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum HeapData {
     Str(Str),
     Bytes(Bytes),
@@ -399,7 +399,7 @@ impl PyTrait for HeapData {
 }
 
 /// Hash caching state stored alongside each heap entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum HashState {
     /// Hash has not yet been computed but the value might be hashable.
     Unknown,
@@ -440,8 +440,8 @@ impl HashState {
 /// they can `.take()` the data out (leaving `None`), pass `&mut Heap` to user code,
 /// then restore the data. This avoids unsafe code while keeping `refcount` accessible
 /// for `inc_ref`/`dec_ref` during the borrow.
-#[derive(Debug)]
-struct HeapValue {
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct HeapValue {
     refcount: usize,
     /// The payload data. Temporarily `None` while borrowed via `with_entry_mut`/`call_attr`.
     data: Option<HeapData>,
@@ -458,6 +458,9 @@ struct HeapValue {
 ///
 /// Generic over `T: ResourceTracker` to support different resource tracking strategies.
 /// When `T = NoLimitTracker` (the default), all resource checks compile away to no-ops.
+///
+/// Serialization requires `T: Serialize` and `T: Deserialize`. Custom serde implementation
+/// handles the Drop constraint by using `std::mem::take` during serialization.
 #[derive(Debug)]
 pub struct Heap<T: ResourceTracker> {
     entries: Vec<Option<HeapValue>>,
@@ -465,6 +468,34 @@ pub struct Heap<T: ResourceTracker> {
     free_list: Vec<HeapId>,
     /// Resource tracker for enforcing limits and scheduling GC.
     tracker: T,
+}
+
+impl<T: ResourceTracker + serde::Serialize> serde::Serialize for Heap<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Heap", 3)?;
+        state.serialize_field("entries", &self.entries)?;
+        state.serialize_field("free_list", &self.free_list)?;
+        state.serialize_field("tracker", &self.tracker)?;
+        state.end()
+    }
+}
+
+impl<'de, T: ResourceTracker + serde::Deserialize<'de>> serde::Deserialize<'de> for Heap<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct HeapFields<T> {
+            entries: Vec<Option<HeapValue>>,
+            free_list: Vec<HeapId>,
+            tracker: T,
+        }
+        let fields = HeapFields::<T>::deserialize(deserializer)?;
+        Ok(Self {
+            entries: fields.entries,
+            free_list: fields.free_list,
+            tracker: fields.tracker,
+        })
+    }
 }
 
 macro_rules! take_data {

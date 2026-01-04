@@ -31,7 +31,7 @@ use crate::MontyException;
 /// let result = runner.run_no_limits(vec![MontyObject::Int(41)]).unwrap();
 /// assert_eq!(result, MontyObject::Int(42));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MontyRun {
     /// The underlying executor containing parsed AST and interns.
     executor: Executor,
@@ -94,6 +94,28 @@ impl MontyRun {
         self.run(inputs, NoLimitTracker::default(), &mut StdPrint)
     }
 
+    /// Serializes the runner to a binary format.
+    ///
+    /// The serialized data can be stored and later restored with `load()`.
+    /// This allows caching parsed code to avoid re-parsing on subsequent runs.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn dump(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Deserializes a runner from binary format.
+    ///
+    /// # Arguments
+    /// * `bytes` - The serialized runner data from `dump()`
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails.
+    pub fn load(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+
     /// Starts execution with the given inputs and resource tracker, consuming self.
     ///
     /// Creates the heap and namespaces, then begins execution.
@@ -140,8 +162,11 @@ impl MontyRun {
 ///
 /// # Type Parameters
 /// * `T` - Resource tracker implementation (e.g., `NoLimitTracker` or `LimitedTracker`)
+///
+/// Serialization requires `T: Serialize + Deserialize`.
 #[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
 pub enum RunProgress<T: ResourceTracker> {
     /// Execution paused at an external function call. Call `state.run(return_value)` to resume.
     FunctionCall {
@@ -186,6 +211,26 @@ impl<T: ResourceTracker> RunProgress<T> {
     }
 }
 
+impl<T: ResourceTracker + serde::Serialize> RunProgress<T> {
+    /// Serializes the execution state to a binary format.
+    ///
+    /// # Errors
+    /// Returns an error if serialization fails.
+    pub fn dump(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+}
+
+impl<T: ResourceTracker + serde::de::DeserializeOwned> RunProgress<T> {
+    /// Deserializes execution state from binary format.
+    ///
+    /// # Errors
+    /// Returns an error if deserialization fails.
+    pub fn load(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
 /// Execution state that can be resumed after an external function call.
 ///
 /// This struct owns all runtime state and provides a `run()` method to continue
@@ -197,7 +242,10 @@ impl<T: ResourceTracker> RunProgress<T> {
 ///
 /// # Type Parameters
 /// * `T` - Resource tracker implementation
-#[derive(Debug)]
+///
+/// Serialization requires `T: Serialize + Deserialize`.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(bound(serialize = "T: serde::Serialize", deserialize = "T: serde::de::DeserializeOwned"))]
 pub struct Snapshot<T: ResourceTracker> {
     /// The underlying executor containing parsed AST and interns.
     executor: Executor,
@@ -243,7 +291,7 @@ impl<T: ResourceTracker> Snapshot<T> {
 ///
 /// This is an internal type used by [`MontyRun`]. It stores the compiled AST and source code
 /// for error reporting but does not support external functions or iterative execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct Executor {
     namespace_size: usize,
     /// Maps variable names to their indices in the namespace. Used for ref-count testing.

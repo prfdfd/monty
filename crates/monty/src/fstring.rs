@@ -29,7 +29,7 @@ use crate::value::Value;
 /// - `Str` (`!s`): Explicitly call `str()`
 /// - `Repr` (`!r`): Call `repr()` for debugging representation
 /// - `Ascii` (`!a`): Call `ascii()` for ASCII-safe representation
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ConversionFlag {
     #[default]
     None,
@@ -48,7 +48,7 @@ pub enum ConversionFlag {
 /// - `Literal("Hello ")`
 /// - `Interpolation { expr: name, ... }`
 /// - `Literal("!")`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum FStringPart {
     /// Literal text segment (e.g., "Hello " in `f"Hello {name}"`)
     Literal(String),
@@ -73,7 +73,7 @@ pub enum FStringPart {
 /// For example:
 /// - `f"{value:>10}"` has `FormatSpec::Static(ParsedFormatSpec { ... })`
 /// - `f"{value:{width}}"` has `FormatSpec::Dynamic` with the `width` variable
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum FormatSpec {
     /// Pre-parsed static format spec (e.g., ">10s", ".2f")
     ///
@@ -92,7 +92,7 @@ pub enum FormatSpec {
 ///
 /// This struct is parsed at parse time for static format specs, avoiding runtime
 /// string parsing. For dynamic format specs, parsing happens after evaluation.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ParsedFormatSpec {
     /// Fill character for padding (default: space)
     pub fill: char,

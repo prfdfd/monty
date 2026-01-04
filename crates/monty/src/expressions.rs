@@ -17,7 +17,7 @@ use crate::fstring::FStringPart;
 /// - The `global` keyword explicitly marks a variable as Global
 /// - Variables declared `nonlocal` or implicitly captured from enclosing scopes
 ///   are accessed through Cells
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum NameScope {
     /// Variable is in the current frame's local namespace
     #[default]
@@ -39,7 +39,7 @@ pub enum NameScope {
 ///
 /// The name is stored as a `StringId` which indexes into the string interner.
 /// To get the actual string, look it up in the `Interns` storage.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Identifier {
     pub position: CodeRange,
     /// Interned name ID - look up in Interns to get the actual string.
@@ -84,7 +84,7 @@ impl Identifier {
 }
 
 /// An expression in the AST.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     Literal(Literal),
     Builtin(Builtins),
@@ -164,7 +164,7 @@ impl Expr {
 ///
 /// Note: unlike the AST `Constant` type, we store tuples only as expressions since they
 /// can't always be recorded as constants.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Literal {
     Ellipsis,
     None,
@@ -196,7 +196,7 @@ impl From<Literal> for Value {
 }
 
 /// An expression with its source location.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExprLoc {
     pub position: CodeRange,
     pub expr: Expr,
@@ -209,7 +209,7 @@ impl ExprLoc {
 }
 
 /// A prepared AST node ready for execution.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Expr(ExprLoc),
     Return(ExprLoc),

@@ -24,7 +24,7 @@ use crate::value::Value;
 /// Uses index-based iteration to avoid borrow conflicts when accessing the heap.
 ///
 /// For strings, stores the string content with a byte offset for O(1) UTF-8 iteration.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ForIterator {
     /// Current iteration index, shared across all iterator types.
     index: usize,
@@ -310,7 +310,7 @@ fn clone_and_inc_ref(value: Value, heap: &mut Heap<impl ResourceTracker>) -> Val
 ///
 /// Each variant stores the data needed to iterate over a specific type,
 /// excluding the index which is stored in the parent `ForIterator` struct.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 enum ForIterValue {
     /// Iterating over a Range, yields `Value::Int`.
     Range { start: i64, step: i64, len: usize },

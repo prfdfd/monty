@@ -24,7 +24,7 @@ use crate::value::Value;
 /// - `range(start, stop, step)` - integers from start, incrementing by step
 ///
 /// The range is computed lazily during iteration, not stored as a list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Range {
     /// The starting value (inclusive). Defaults to 0.
     pub start: i64,

@@ -7,7 +7,7 @@ use crate::run_frame::RunResult;
 use crate::value::Value;
 
 /// Unique identifier for values stored inside the namespace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct NamespaceId(u32);
 
 impl NamespaceId {
@@ -26,7 +26,7 @@ impl NamespaceId {
 /// At module level, local_idx == GLOBAL_NS_IDX (same namespace).
 pub const GLOBAL_NS_IDX: NamespaceId = NamespaceId(0);
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Namespace(Vec<Value>);
 
 impl Namespace {
@@ -79,7 +79,7 @@ impl IntoIterator for Namespace {
 ///
 /// Variables captured by closures are stored in cells on the heap, not in namespaces.
 /// The `get_var_value` method handles both namespace-based and cell-based variable access.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct Namespaces {
     stack: Vec<Namespace>,
     /// if we have an old namespace to reuse, trace its id

@@ -21,7 +21,7 @@ use crate::{
 /// - A name that will be looked up in the namespace at runtime (for callable variables)
 ///
 /// Separate from Value to allow deriving Clone without Value's Clone restrictions.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Callable {
     /// A builtin function like `print`, `len`, `str`, etc.
     Builtin(Builtins),

@@ -628,11 +628,23 @@ fn try_run_iter_test(path: &Path, code: &str, expectation: &Expectation) -> Resu
 }
 
 /// Execute the iter loop, dispatching external function calls until complete.
+///
+/// When `ref-count-panic` feature is NOT enabled, this function also tests
+/// serialization round-trips by dumping and loading the execution state at
+/// each external function call boundary.
 fn run_iter_loop(exec: MontyRun) -> Result<MontyObject, MontyException> {
     let limits = ResourceLimits::new().max_recursion_depth(Some(TEST_RECURSION_LIMIT));
     let mut progress = exec.start(vec![], LimitedTracker::new(limits), &mut StdPrint)?;
 
     loop {
+        // Test serialization round-trip at each step (skip when ref-count-panic is enabled
+        // since the old RunProgress would panic on drop without proper cleanup)
+        #[cfg(not(feature = "ref-count-panic"))]
+        {
+            let bytes = progress.dump().expect("failed to dump RunProgress");
+            progress = RunProgress::load(&bytes).expect("failed to load RunProgress");
+        }
+
         match progress {
             RunProgress::Complete(result) => return Ok(result),
             RunProgress::FunctionCall {

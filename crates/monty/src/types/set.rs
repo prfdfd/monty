@@ -16,7 +16,7 @@ use crate::value::{Attr, Value};
 use super::PyTrait;
 
 /// Entry in the set storage, containing a value and its cached hash.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct SetEntry {
     pub(crate) value: Value,
     /// Cached hash for efficient lookup and reinsertion.
@@ -1285,5 +1285,50 @@ impl FrozenSet {
         let result = self.0.is_disjoint(&temp.0, heap, interns);
         temp.0.drop_all_values(heap);
         result
+    }
+}
+
+// Custom serde implementations for SetStorage, Set, and FrozenSet.
+// Only serialize entries; rebuild the indices hash table on deserialize.
+
+impl serde::Serialize for SetStorage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SetStorage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries: Vec<SetEntry> = serde::Deserialize::deserialize(deserializer)?;
+        // Rebuild the indices hash table from the entries
+        let mut indices = HashTable::with_capacity(entries.len());
+        for (idx, entry) in entries.iter().enumerate() {
+            indices.insert_unique(entry.hash, idx, |&i| entries[i].hash);
+        }
+        Ok(Self { indices, entries })
+    }
+}
+
+impl serde::Serialize for Set {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Set {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(SetStorage::deserialize(deserializer)?))
+    }
+}
+
+impl serde::Serialize for FrozenSet {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FrozenSet {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(SetStorage::deserialize(deserializer)?))
     }
 }

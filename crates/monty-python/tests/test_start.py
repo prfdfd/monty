@@ -16,7 +16,7 @@ def test_start_no_external_functions_returns_complete():
 def test_start_with_external_function_returns_progress():
     m = monty.Monty('func()', external_functions=['func'])
     result = m.start()
-    assert isinstance(result, monty.MontyProgress)
+    assert isinstance(result, monty.MontySnapshot)
     assert result.script_name == snapshot('main.py')
     assert result.function_name == snapshot('func')
     assert result.args == snapshot(())
@@ -26,14 +26,14 @@ def test_start_with_external_function_returns_progress():
 def test_start_custom_script_name():
     m = monty.Monty('func()', script_name='custom.py', external_functions=['func'])
     result = m.start()
-    assert isinstance(result, monty.MontyProgress)
+    assert isinstance(result, monty.MontySnapshot)
     assert result.script_name == snapshot('custom.py')
 
 
 def test_start_progress_resume_returns_complete():
     m = monty.Monty('func()', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('func')
     assert progress.args == snapshot(())
     assert progress.kwargs == snapshot({})
@@ -46,7 +46,7 @@ def test_start_progress_resume_returns_complete():
 def test_start_progress_with_args():
     m = monty.Monty('func(1, 2, 3)', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('func')
     assert progress.args == snapshot((1, 2, 3))
     assert progress.kwargs == snapshot({})
@@ -55,7 +55,7 @@ def test_start_progress_with_args():
 def test_start_progress_with_kwargs():
     m = monty.Monty('func(a=1, b="two")', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('func')
     assert progress.args == snapshot(())
     assert progress.kwargs == snapshot({'a': 1, 'b': 'two'})
@@ -64,7 +64,7 @@ def test_start_progress_with_kwargs():
 def test_start_progress_with_mixed_args_kwargs():
     m = monty.Monty('func(1, 2, x="hello", y=True)', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('func')
     assert progress.args == snapshot((1, 2))
     assert progress.kwargs == snapshot({'x': 'hello', 'y': True})
@@ -75,12 +75,12 @@ def test_start_multiple_external_calls():
 
     # First call
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('a')
 
     # Resume with first return value
     progress = progress.resume(10)
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('b')
 
     # Resume with second return value
@@ -93,9 +93,9 @@ def test_start_chain_of_external_calls():
     m = monty.Monty('c() + c() + c()', external_functions=['c'])
 
     call_count = 0
-    progress: monty.MontyProgress | monty.MontyComplete = m.start()
+    progress: monty.MontySnapshot | monty.MontyComplete = m.start()
 
-    while isinstance(progress, monty.MontyProgress):
+    while isinstance(progress, monty.MontySnapshot):
         assert progress.function_name == snapshot('c')
         call_count += 1
         progress = progress.resume(call_count)
@@ -108,7 +108,7 @@ def test_start_chain_of_external_calls():
 def test_start_with_inputs():
     m = monty.Monty('process(x)', inputs=['x'], external_functions=['process'])
     progress = m.start(inputs={'x': 100})
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert progress.function_name == snapshot('process')
     assert progress.args == snapshot((100,))
 
@@ -136,7 +136,7 @@ def test_start_with_print_callback():
 def test_start_resume_cannot_be_called_twice():
     m = monty.Monty('func()', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
 
     # First resume succeeds
     progress.resume(1)
@@ -150,7 +150,7 @@ def test_start_resume_cannot_be_called_twice():
 def test_start_complex_return_value():
     m = monty.Monty('func()', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
 
     result = progress.resume({'a': [1, 2, 3], 'b': {'nested': True}})
     assert isinstance(result, monty.MontyComplete)
@@ -160,7 +160,7 @@ def test_start_complex_return_value():
 def test_start_resume_with_none():
     m = monty.Monty('func()', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
 
     result = progress.resume(None)
     assert isinstance(result, monty.MontyComplete)
@@ -170,9 +170,9 @@ def test_start_resume_with_none():
 def test_progress_repr():
     m = monty.Monty('func(1, x=2)', external_functions=['func'])
     progress = m.start()
-    assert isinstance(progress, monty.MontyProgress)
+    assert isinstance(progress, monty.MontySnapshot)
     assert repr(progress) == snapshot(
-        "MontyProgress(script_name='main.py', function_name='func', args=(1,), kwargs={'x': 2})"
+        "MontySnapshot(script_name='main.py', function_name='func', args=(1,), kwargs={'x': 2})"
     )
 
 
@@ -188,7 +188,7 @@ def test_start_can_reuse_monty_instance():
 
     # First run
     progress1 = m.start(inputs={'x': 1})
-    assert isinstance(progress1, monty.MontyProgress)
+    assert isinstance(progress1, monty.MontySnapshot)
     assert progress1.args == snapshot((1,))
     result1 = progress1.resume(10)
     assert isinstance(result1, monty.MontyComplete)
@@ -196,7 +196,7 @@ def test_start_can_reuse_monty_instance():
 
     # Second run with different input
     progress2 = m.start(inputs={'x': 2})
-    assert isinstance(progress2, monty.MontyProgress)
+    assert isinstance(progress2, monty.MontySnapshot)
     assert progress2.args == snapshot((2,))
     result2 = progress2.resume(20)
     assert isinstance(result2, monty.MontyComplete)

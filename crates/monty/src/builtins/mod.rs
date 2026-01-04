@@ -47,7 +47,7 @@ use crate::value::Value;
 ///
 /// Uses strum derives for automatic `Display`, `FromStr`, and `AsRef<str>` implementations.
 /// All variants serialize to lowercase (e.g., `Print` -> "print").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Builtins {
     /// A builtin function like `print`, `len`, `type`, etc.
     Function(BuiltinsFunctions),
@@ -134,7 +134,9 @@ impl FromStr for Builtins {
 ///
 /// Uses strum derives for automatic `Display`, `FromStr`, and `IntoStaticStr` implementations.
 /// All variants serialize to lowercase (e.g., `Print` -> "print").
-#[derive(Debug, Clone, Copy, Display, EnumString, IntoStaticStr, PartialEq, Eq, Hash)]
+#[derive(
+    Debug, Clone, Copy, Display, EnumString, IntoStaticStr, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[strum(serialize_all = "lowercase")]
 pub enum BuiltinsFunctions {
     Abs,

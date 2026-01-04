@@ -41,7 +41,7 @@ use crate::value::Value;
 /// ```
 /// The `*args` slot is only present if `var_args` is Some.
 /// The `**kwargs` slot is only present if `var_kwargs` is Some.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Signature {
     /// Positional-only parameters, e.g. `a, b` in `def f(a, b, /): ...`
     ///

@@ -18,7 +18,7 @@ use crate::value::Value;
 /// Python bytes value stored on the heap.
 ///
 /// Wraps a `Vec<u8>` and provides Python-compatible operations.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Bytes(Vec<u8>);
 
 impl Bytes {

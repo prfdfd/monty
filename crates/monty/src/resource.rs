@@ -147,7 +147,7 @@ const DEFAULT_GC_INTERVAL: usize = 100_000;
 /// GC runs every 100,000 allocations by default.
 ///
 /// Recursion limit is set to the cpython default of 1000.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NoLimitTracker {
     /// Number of allocations since last garbage collection.
     allocations_since_gc: usize,
@@ -201,7 +201,7 @@ impl ResourceTracker for NoLimitTracker {
 /// All limits are optional - set to `None` to disable a specific limit.
 /// Use `ResourceLimits::default()` for no limits, or build custom limits
 /// with the builder pattern.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ResourceLimits {
     /// Maximum number of heap allocations allowed.
     pub max_allocations: Option<usize>,
@@ -266,10 +266,15 @@ impl ResourceLimits {
 /// Tracks allocation count, memory usage, and execution time, returning
 /// errors when limits are exceeded. Also schedules garbage collection
 /// at configurable intervals.
-#[derive(Debug)]
+///
+/// When serialized/deserialized, the `start_time` is reset to `Instant::now()`.
+/// This means time limits restart from zero after deserialization.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LimitedTracker {
     limits: ResourceLimits,
     /// When execution started (for time limit checking).
+    /// Reset to `Instant::now()` on deserialization.
+    #[serde(skip, default = "Instant::now")]
     start_time: Instant,
     /// Total number of allocations made.
     allocation_count: usize,

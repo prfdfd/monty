@@ -550,7 +550,7 @@ impl ExcType {
 ///
 /// This is used for performance reasons for common exception patterns.
 /// Exception messages use `String` for owned storage.
-#[derive(Debug, Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct SimpleException {
     exc_type: ExcType,
     arg: Option<String>,
@@ -723,7 +723,7 @@ macro_rules! exc_err_fmt {
 pub(crate) use exc_err_fmt;
 
 /// A raised exception with optional stack frame for traceback.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExceptionRaise {
     pub exc: SimpleException,
     /// The stack frame where the exception was raised (first in vec is closest "bottom" frame).
@@ -813,7 +813,7 @@ impl ExceptionRaise {
 ///
 /// Stores position information and optional function name as StringId.
 /// The actual name string must be looked up externally when formatting the traceback.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RawStackFrame {
     pub position: CodeRange,
     /// The name of the frame (function name StringId, or None for module-level code).

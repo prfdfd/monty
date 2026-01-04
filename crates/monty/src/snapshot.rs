@@ -14,7 +14,7 @@ use crate::{
 /// pause execution and return control to the caller.
 /// When a frame encounters a call to an external function, it produces
 /// `FunctionCall` to pause execution and let the host provide the return value.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum FrameExit {
     /// Normal return from a function or end of module execution.
     Return(Value),
@@ -56,7 +56,7 @@ impl AbstractSnapshotTracker for NoSnapshotTracker {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotTracker {
     /// stack of positions, note this is reversed (last value is the outermost position)
     /// as we push the outermost position last and pop it first
@@ -99,7 +99,7 @@ impl AbstractSnapshotTracker for SnapshotTracker {
 }
 
 /// Represents a position within nested control flow for snapshotting and code resumption.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct CodePosition {
     /// Index of the next node to execute within the node array
     pub index: usize,
@@ -111,7 +111,7 @@ pub(crate) struct CodePosition {
 ///
 /// When execution suspends inside a control flow structure (if/for), this records
 /// which branch was taken so we can skip re-evaluating the condition on resume.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ClauseState {
     /// When resuming within the if statement,
     /// whether the condition was met - true to resume the if branch and false to resume the else branch
@@ -129,7 +129,7 @@ pub(crate) enum ClauseState {
 /// survive external calls in the finally block. Pending exceptions and returns
 /// are stored here so finally blocks can make external calls and still properly
 /// propagate exceptions or return values afterward.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct TryClauseState {
     /// Which phase of the try/except block we're in.
     pub phase: TryPhase,
@@ -146,7 +146,7 @@ pub struct TryClauseState {
 /// Which phase of a try/except/finally block we're executing.
 ///
 /// The order of variants matters for `PartialOrd` - earlier phases come first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TryPhase {
     /// Executing the try body.
     TryBody,

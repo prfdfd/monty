@@ -14,7 +14,7 @@ mod monty_cls;
 use pyo3::prelude::*;
 
 pub use limits::PyResourceLimits;
-pub use monty_cls::{PyMonty, PyMontyComplete, PyMontyProgress};
+pub use monty_cls::{PyMonty, PyMontyComplete, PyMontySnapshot};
 
 /// Monty - A sandboxed Python interpreter written in Rust.
 #[pymodule]
@@ -23,7 +23,7 @@ mod monty {
     use super::PyMonty as Monty;
 
     #[pymodule_export]
-    use super::PyMontyProgress as MontyProgress;
+    use super::PyMontySnapshot as MontySnapshot;
 
     #[pymodule_export]
     use super::PyMontyComplete as MontyComplete;

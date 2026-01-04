@@ -6,8 +6,8 @@ use ::monty::{
     LimitedTracker, MontyException, MontyObject, MontyRun, NoLimitTracker, PrintWriter, ResourceTracker, RunProgress,
     Snapshot, StdPrint,
 };
-use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError};
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use pyo3::{prelude::*, IntoPyObjectExt};
 
 use crate::convert::{monty_to_py, py_to_monty};
@@ -20,7 +20,7 @@ use crate::limits::PyResourceLimits;
 /// Parses and compiles Python code on initialization, then can be run
 /// multiple times with different input values. This separates the parsing
 /// cost from execution, making repeated runs more efficient.
-#[pyclass(name = "Monty")]
+#[pyclass(name = "Monty", module = "monty")]
 #[derive(Debug)]
 pub struct PyMonty {
     /// The compiled code snapshot, ready to execute.
@@ -189,6 +189,51 @@ impl PyMonty {
         s.push(')');
         s
     }
+
+    /// Serializes the Monty instance to a binary format.
+    ///
+    /// The serialized data can be stored and later restored with `Monty.load()`.
+    /// This allows caching parsed code to avoid re-parsing on subsequent runs.
+    ///
+    /// # Returns
+    /// Bytes containing the serialized Monty instance.
+    ///
+    /// # Raises
+    /// `ValueError` if serialization fails.
+    fn dump<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let serialized = SerializedMonty {
+            runner: self.runner.clone(),
+            script_name: self.script_name.clone(),
+            input_names: self.input_names.clone(),
+            external_function_names: self.external_function_names.clone(),
+        };
+        let bytes = postcard::to_allocvec(&serialized).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+
+    /// Deserializes a Monty instance from binary format.
+    ///
+    /// # Arguments
+    /// * `data` - The serialized Monty data from `dump()`
+    ///
+    /// # Returns
+    /// A new Monty instance.
+    ///
+    /// # Raises
+    /// `ValueError` if deserialization fails.
+    #[staticmethod]
+    fn load(data: &Bound<'_, PyBytes>) -> PyResult<Self> {
+        let bytes = data.as_bytes();
+        let serialized: SerializedMonty =
+            postcard::from_bytes(bytes).map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        Ok(Self {
+            runner: serialized.runner,
+            script_name: serialized.script_name,
+            input_names: serialized.input_names,
+            external_function_names: serialized.external_function_names,
+        })
+    }
 }
 
 impl PyMonty {
@@ -267,7 +312,7 @@ impl EitherProgress {
             dict.set_item(monty_to_py(py, k)?, monty_to_py(py, v)?)?;
         }
 
-        let slf = PyMontyProgress {
+        let slf = PyMontySnapshot {
             snapshot,
             print_callback: print_callback.map(|callback| callback.clone_ref(py)),
             script_name,
@@ -279,7 +324,11 @@ impl EitherProgress {
     }
 }
 
-#[derive(Debug)]
+/// Runtime execution snapshot, parameterized by resource tracker type.
+///
+/// Used internally by `PyMontySnapshot` to store execution state.
+/// The `Done` variant indicates the snapshot has been consumed.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 enum EitherSnapshot {
     NoLimit(Snapshot<NoLimitTracker>),
     Limited(Snapshot<LimitedTracker>),
@@ -288,9 +337,9 @@ enum EitherSnapshot {
     Done,
 }
 
-#[pyclass(name = "MontyProgress")]
+#[pyclass(name = "MontySnapshot", module = "monty")]
 #[derive(Debug)]
-pub struct PyMontyProgress {
+pub struct PyMontySnapshot {
     snapshot: EitherSnapshot,
     print_callback: Option<Py<PyAny>>,
 
@@ -310,7 +359,7 @@ pub struct PyMontyProgress {
 }
 
 #[pymethods]
-impl PyMontyProgress {
+impl PyMontySnapshot {
     pub fn resume<'py>(&mut self, py: Python<'py>, return_value: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let monty_return_value = py_to_monty(return_value)?;
         let snapshot = std::mem::replace(&mut self.snapshot, EitherSnapshot::Done);
@@ -337,9 +386,101 @@ impl PyMontyProgress {
         progress.progress_or_complete(py, self.script_name.clone(), self.print_callback.take())
     }
 
+    /// Serializes the MontySnapshot instance to a binary format.
+    ///
+    /// The serialized data can be stored and later restored with `MontySnapshot.load()`.
+    /// This allows suspending execution and resuming later, potentially in a different process.
+    ///
+    /// Note: The `print_callback` is not serialized and must be re-provided when resuming
+    /// after loading.
+    ///
+    /// # Returns
+    /// Bytes containing the serialized MontySnapshot instance.
+    ///
+    /// # Raises
+    /// `ValueError` if serialization fails.
+    /// `RuntimeError` if the progress has already been resumed.
+    fn dump<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        if matches!(self.snapshot, EitherSnapshot::Done) {
+            return Err(PyRuntimeError::new_err(
+                "Cannot dump progress that has already been resumed",
+            ));
+        }
+
+        // Convert Python args to MontyObject
+        let args: Vec<MontyObject> = self
+            .args
+            .bind(py)
+            .iter()
+            .map(|item| py_to_monty(&item))
+            .collect::<PyResult<_>>()?;
+
+        // Convert Python kwargs to MontyObject pairs
+        let kwargs: Vec<(MontyObject, MontyObject)> = self
+            .kwargs
+            .bind(py)
+            .iter()
+            .map(|(k, v)| Ok((py_to_monty(&k)?, py_to_monty(&v)?)))
+            .collect::<PyResult<_>>()?;
+
+        let serialized = SerializedProgress {
+            snapshot: &self.snapshot,
+            script_name: &self.script_name,
+            function_name: &self.function_name,
+            args,
+            kwargs,
+        };
+        let bytes = postcard::to_allocvec(&serialized).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyBytes::new(py, &bytes))
+    }
+
+    /// Deserializes a MontySnapshot instance from binary format.
+    ///
+    /// Note: The `print_callback` is not preserved during serialization and must be
+    /// re-provided as a keyword argument if print output is needed.
+    ///
+    /// # Arguments
+    /// * `data` - The serialized MontySnapshot data from `dump()`
+    /// * `print_callback` - Optional callback for print output
+    ///
+    /// # Returns
+    /// A new MontySnapshot instance.
+    ///
+    /// # Raises
+    /// `ValueError` if deserialization fails.
+    #[staticmethod]
+    #[pyo3(signature = (data, *, print_callback=None))]
+    fn load(py: Python<'_>, data: &Bound<'_, PyBytes>, print_callback: Option<Py<PyAny>>) -> PyResult<Self> {
+        let bytes = data.as_bytes();
+        let serialized: SerializedProgressOwned =
+            postcard::from_bytes(bytes).map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+        // Convert MontyObject args to Python
+        let args: Vec<Py<PyAny>> = serialized
+            .args
+            .iter()
+            .map(|item| monty_to_py(py, item))
+            .collect::<PyResult<_>>()?;
+
+        // Convert MontyObject kwargs to Python dict
+        let kwargs_dict = PyDict::new(py);
+        for (k, v) in &serialized.kwargs {
+            kwargs_dict.set_item(monty_to_py(py, k)?, monty_to_py(py, v)?)?;
+        }
+
+        Ok(Self {
+            snapshot: serialized.snapshot,
+            print_callback,
+            script_name: serialized.script_name,
+            function_name: serialized.function_name,
+            args: PyTuple::new(py, args)?.unbind(),
+            kwargs: kwargs_dict.unbind(),
+        })
+    }
+
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
         Ok(format!(
-            "MontyProgress(script_name='{}', function_name='{}', args={}, kwargs={})",
+            "MontySnapshot(script_name='{}', function_name='{}', args={}, kwargs={})",
             self.script_name,
             self.function_name,
             self.args.bind(py).repr()?,
@@ -348,7 +489,7 @@ impl PyMontyProgress {
     }
 }
 
-#[pyclass(name = "MontyComplete")]
+#[pyclass(name = "MontyComplete", module = "monty")]
 pub struct PyMontyComplete {
     #[pyo3(get)]
     pub output: Py<PyAny>,
@@ -436,4 +577,37 @@ impl PrintWriter for CallbackStringPrint<'_> {
     fn stdout_push(&mut self, end: char) -> Result<(), MontyException> {
         self.write(end).map_err(|e| exc_py_to_monty(self.0.py(), e))
     }
+}
+
+/// Serialization wrapper for `PyMonty` that includes all fields needed for reconstruction.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SerializedMonty {
+    runner: MontyRun,
+    script_name: String,
+    input_names: Vec<String>,
+    external_function_names: Vec<String>,
+}
+
+/// Serialization wrapper for `PyMontySnapshot` that uses borrowed references for efficiency.
+///
+/// Used during `dump()` to avoid unnecessary cloning.
+#[derive(serde::Serialize)]
+struct SerializedProgress<'a> {
+    snapshot: &'a EitherSnapshot,
+    script_name: &'a str,
+    function_name: &'a str,
+    args: Vec<MontyObject>,
+    kwargs: Vec<(MontyObject, MontyObject)>,
+}
+
+/// Owned version of `SerializedProgress` for deserialization.
+///
+/// Used during `load()` to own all the deserialized data.
+#[derive(serde::Deserialize)]
+struct SerializedProgressOwned {
+    snapshot: EitherSnapshot,
+    script_name: String,
+    function_name: String,
+    args: Vec<MontyObject>,
+    kwargs: Vec<(MontyObject, MontyObject)>,
 }

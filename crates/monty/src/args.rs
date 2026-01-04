@@ -17,7 +17,7 @@ use crate::{
 /// Uses specific variants for common cases (0-2 arguments).
 /// Most Python method calls have at most 2 arguments, so this optimization
 /// eliminates the Vec heap allocation overhead for the vast majority of calls.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum ArgValues {
     Empty,
     One(Value),
@@ -149,7 +149,7 @@ impl ArgValues {
 ///
 /// Used to capture both the case of inline keyword arguments `foo(foo=1, bar=2)`
 /// and the case of a dictionary passed as a single argument `foo(**kwargs)`.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub enum KwargsValues {
     Empty,
     Inline(Vec<(StringId, Value)>),
@@ -262,14 +262,14 @@ impl Iterator for KwargsValuesIter {
 impl ExactSizeIterator for KwargsValuesIter {}
 
 /// A keyword argument in a function call expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Kwarg {
     pub key: Identifier,
     pub value: ExprLoc,
 }
 
 /// Expressions that make up a function call's arguments.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ArgExprs {
     Empty,
     One(ExprLoc),

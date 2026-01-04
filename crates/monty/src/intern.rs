@@ -17,7 +17,7 @@ use crate::function::Function;
 ///
 /// Uses `u32` to save space (4 bytes vs 8 bytes for `usize`). This limits us to
 /// ~4 billion unique interns, which is more than sufficient.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct StringId(u32);
 
 /// The StringId for `"<module>"` - always index 0 in the interner.
@@ -34,7 +34,7 @@ impl StringId {
 /// Index into the bytes interner's storage.
 ///
 /// Separate from `StringId` to distinguish string vs bytes literals at the type level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BytesId(u32);
 
 impl BytesId {
@@ -46,7 +46,7 @@ impl BytesId {
 }
 
 /// Unique identifier for functions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct FunctionId(u32);
 
 impl FunctionId {
@@ -62,7 +62,7 @@ impl FunctionId {
 }
 
 /// Unique identifier for external functions
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct ExtFunctionId(u32);
 
 impl ExtFunctionId {
@@ -161,7 +161,7 @@ impl InternerBuilder {
 /// Read-only storage for interned string and bytes.
 ///
 /// This provides lookup by `StringId`, `BytesId` and `FunctionId` for interned literals and functions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Interns {
     strings: Vec<String>,
     bytes: Vec<Vec<u8>>,

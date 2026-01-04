@@ -24,7 +24,7 @@ use crate::value::{Attr, Value};
 /// When values are added to the list (via append, insert, etc.), their
 /// reference counts are incremented if they are heap-allocated (Ref variants).
 /// This ensures values remain valid while referenced by the list.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct List(Vec<Value>);
 
 impl List {

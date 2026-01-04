@@ -2,7 +2,7 @@ from typing import Any, Callable, Literal, final
 
 from typing_extensions import Self
 
-__all__ = ['Monty', 'MontyComplete', 'MontyProgress', 'ResourceLimits']
+__all__ = ['Monty', 'MontyComplete', 'MontySnapshot', 'ResourceLimits']
 
 @final
 class Monty:
@@ -65,7 +65,7 @@ class Monty:
         inputs: dict[str, Any] | None = None,
         limits: ResourceLimits | None = None,
         print_callback: Callable[[Literal['stdout'], str], None] | None = None,
-    ) -> MontyProgress | MontyComplete:
+    ) -> MontySnapshot | MontyComplete:
         """
         Start the code execution and return a progress object, or completion.
 
@@ -77,14 +77,43 @@ class Monty:
             print_callback: Optional callback for print output
 
         Returns:
-            MontyProgress if an external function call is pending,
+            MontySnapshot if an external function call is pending,
             MontyComplete if execution finished without external calls.
         """
 
     def __repr__(self) -> str: ...
 
+    def dump(self) -> bytes:
+        """
+        Serialize the Monty instance to a binary format.
+
+        The serialized data can be stored and later restored with `Monty.load()`.
+        This allows caching parsed code to avoid re-parsing on subsequent runs.
+
+        Returns:
+            Bytes containing the serialized Monty instance.
+
+        Raises:
+            ValueError: If serialization fails.
+        """
+
+    @staticmethod
+    def load(data: bytes) -> 'Monty':
+        """
+        Deserialize a Monty instance from binary format.
+
+        Arguments:
+            data: The serialized Monty data from `dump()`
+
+        Returns:
+            A new Monty instance.
+
+        Raises:
+            ValueError: If deserialization fails.
+        """
+
 @final
-class MontyProgress:
+class MontySnapshot:
     """
     Represents a paused execution waiting for an external function call return value.
 
@@ -108,17 +137,17 @@ class MontyProgress:
     def kwargs(self) -> dict[str, Any]:
         """The keyword arguments passed to the external function."""
 
-    def resume(self, return_value: Any) -> MontyProgress | MontyComplete:
+    def resume(self, return_value: Any) -> MontySnapshot | MontyComplete:
         """
         Resume execution with the return value from an external function call.
 
-        Resume may only be called once on each MontyProgress instance.
+        Resume may only be called once on each MontySnapshot instance.
 
         Arguments:
             return_value: The value to return from the external function call.
 
         Returns:
-            MontyProgress if another external function call is pending,
+            MontySnapshot if another external function call is pending,
             MontyComplete if execution finished.
 
         Raises:
@@ -126,6 +155,47 @@ class MontyProgress:
         """
 
     def __repr__(self) -> str: ...
+
+    def dump(self) -> bytes:
+        """
+        Serialize the MontySnapshot instance to a binary format.
+
+        The serialized data can be stored and later restored with `MontySnapshot.load()`.
+        This allows suspending execution and resuming later, potentially in a different process.
+
+        Note: The `print_callback` is not serialized and must be re-provided via
+        `set_print_callback()` after loading if print output is needed.
+
+        Returns:
+            Bytes containing the serialized MontySnapshot instance.
+
+        Raises:
+            ValueError: If serialization fails.
+            RuntimeError: If the progress has already been resumed.
+        """
+
+    @staticmethod
+    def load(
+        data: bytes,
+        *,
+        print_callback: Callable[[Literal['stdout'], str], None] | None = None,
+    ) -> 'MontySnapshot':
+        """
+        Deserialize a MontySnapshot instance from binary format.
+
+        Note: The `print_callback` is not preserved during serialization and must be
+        re-provided as a keyword argument if print output is needed.
+
+        Arguments:
+            data: The serialized MontySnapshot data from `dump()`
+            print_callback: Optional callback for print output
+
+        Returns:
+            A new MontySnapshot instance.
+
+        Raises:
+            ValueError: If deserialization fails.
+        """
 
 @final
 class MontyComplete:

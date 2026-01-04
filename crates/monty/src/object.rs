@@ -5,9 +5,6 @@ use std::{
 
 use ahash::AHashSet;
 use indexmap::IndexMap;
-use serde::de::{self, MapAccess, SeqAccess, Visitor};
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     builtins::Builtins,
@@ -64,7 +61,12 @@ use crate::{
 /// - `Bytes` → `{"$bytes": [...]}`
 /// - `Exception` → `{"$exception": {"type": "...", "arg": "..."}}`
 /// - `Repr` → `{"$repr": "..."}`
-#[derive(Debug, Clone)]
+///
+/// # Binary Serialization
+///
+/// For binary serialization (e.g., with postcard), `MontyObject` uses derived serde
+/// with internally tagged format. This differs from the natural JSON format.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum MontyObject {
     /// Python's `Ellipsis` singleton (`...`).
     Ellipsis,
@@ -110,11 +112,11 @@ pub enum MontyObject {
     /// Represents a cycle detected during Value-to-MontyObject conversion.
     ///
     /// When converting cyclic structures (e.g., `a = []; a.append(a)`), this variant
-    /// is used to break the infinite recursion. Contains the type-specific placeholder
-    /// string (e.g., `"[...]"` for lists, `"{...}"` for dicts).
+    /// is used to break the infinite recursion. Contains the heap ID and the type-specific
+    /// placeholder string (e.g., `"[...]"` for lists, `"{...}"` for dicts).
     ///
     /// This is output-only and cannot be used as an input to `Executor::run()`.
-    Cycle(HeapId, &'static str),
+    Cycle(HeapId, String),
 }
 
 impl fmt::Display for MontyObject {
@@ -251,10 +253,10 @@ impl MontyObject {
                 if visited.contains(id) {
                     // Cycle detected - return appropriate placeholder
                     return match heap.get(*id) {
-                        HeapData::List(_) => Self::Cycle(*id, "[...]"),
-                        HeapData::Tuple(_) => Self::Cycle(*id, "(...)"),
-                        HeapData::Dict(_) => Self::Cycle(*id, "{...}"),
-                        _ => Self::Cycle(*id, "..."),
+                        HeapData::List(_) => Self::Cycle(*id, "[...]".to_owned()),
+                        HeapData::Tuple(_) => Self::Cycle(*id, "(...)".to_owned()),
+                        HeapData::Dict(_) => Self::Cycle(*id, "{...}".to_owned()),
+                        _ => Self::Cycle(*id, "...".to_owned()),
                     };
                 }
 
@@ -691,209 +693,11 @@ impl TryFrom<&MontyObject> for bool {
     }
 }
 
-/// Custom JSON serialization for `MontyObject`.
-///
-/// Serializes Python values to natural JSON representations where possible.
-/// Output-only types (Ellipsis, Tuple, Bytes, Exception, Repr) use tagged objects.
-impl Serialize for MontyObject {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::None => serializer.serialize_none(),
-            Self::Bool(b) => serializer.serialize_bool(*b),
-            Self::Int(i) => serializer.serialize_i64(*i),
-            Self::Float(f) => serializer.serialize_f64(*f),
-            Self::String(s) => serializer.serialize_str(s),
-            Self::List(items) => items.serialize(serializer),
-            Self::Dict(pairs) => {
-                // Serialize as JSON object with string keys
-                let mut map_ser = serializer.serialize_map(Some(pairs.len()))?;
-                for (k, v) in pairs {
-                    // Extract string key or convert to repr for non-string keys
-                    match k {
-                        Self::String(s) => map_ser.serialize_entry(s, v)?,
-                        other => map_ser.serialize_entry(&other.py_repr(), v)?,
-                    }
-                }
-                map_ser.end()
-            }
-            // Output-only types use tagged format
-            Self::Ellipsis => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$ellipsis", &true)?;
-                map.end()
-            }
-            Self::Tuple(items) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$tuple", items)?;
-                map.end()
-            }
-            Self::Set(items) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$set", items)?;
-                map.end()
-            }
-            Self::FrozenSet(items) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$frozenset", items)?;
-                map.end()
-            }
-            Self::Bytes(bytes) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$bytes", bytes)?;
-                map.end()
-            }
-            Self::Exception { exc_type, arg } => {
-                #[derive(Serialize)]
-                struct ExcData<'a> {
-                    r#type: &'a str,
-                    arg: &'a Option<String>,
-                }
-                let mut map = serializer.serialize_map(Some(1))?;
-                let type_str: &'static str = exc_type.into();
-                map.serialize_entry("$exception", &ExcData { r#type: type_str, arg })?;
-                map.end()
-            }
-            Self::Repr(s) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$repr", s)?;
-                map.end()
-            }
-            Self::Cycle(_, placeholder) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("$cycle", placeholder)?;
-                map.end()
-            }
-            Self::Type(t) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                let type_str: &'static str = t.into();
-                map.serialize_entry("$type", type_str)?;
-                map.end()
-            }
-        }
-    }
-}
-
-/// Custom JSON deserialization for `MontyObject`.
-///
-/// Deserializes natural JSON values to Python types:
-/// - `null` → `None`
-/// - `true`/`false` → `Bool`
-/// - integers → `Int`
-/// - floats → `Float`
-/// - strings → `String`
-/// - arrays → `List`
-/// - objects → `Dict` (keys become `String` variants)
-///
-/// Note: Tuple, Bytes, Exception, Ellipsis, and Repr cannot be deserialized from JSON.
-impl<'de> Deserialize<'de> for MontyObject {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(MontyObjectVisitor)
-    }
-}
-
-/// Visitor for deserializing JSON into `MontyObject`.
-struct MontyObjectVisitor;
-
-impl<'de> Visitor<'de> for MontyObjectVisitor {
-    type Value = MontyObject;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a JSON value (null, bool, number, string, array, or object)")
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::None)
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::None)
-    }
-
-    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::Bool(v))
-    }
-
-    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::Int(v))
-    }
-
-    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        // Convert to i64 if possible, otherwise error
-        i64::try_from(v)
-            .map(MontyObject::Int)
-            .map_err(|_| de::Error::custom(format!("integer {v} is too large for i64")))
-    }
-
-    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::Float(v))
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::String(v.to_owned()))
-    }
-
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(MontyObject::String(v))
-    }
-
-    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut items = Vec::new();
-        while let Some(item) = seq.next_element()? {
-            items.push(item);
-        }
-        Ok(MontyObject::List(items))
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut pairs = Vec::new();
-        while let Some((key, value)) = map.next_entry::<String, MontyObject>()? {
-            pairs.push((MontyObject::String(key), value));
-        }
-        Ok(MontyObject::Dict(pairs.into()))
-    }
-}
-
 /// A collection of key-value pairs representing Python dictionary contents.
 ///
 /// Used internally by `MontyObject::Dict` to store dictionary entries while preserving
 /// insertion order. Keys and values are both `MontyObject` instances.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DictPairs(Vec<(MontyObject, MontyObject)>);
 
 impl From<Vec<(MontyObject, MontyObject)>> for DictPairs {
@@ -938,10 +742,6 @@ impl FromIterator<(MontyObject, MontyObject)> for DictPairs {
 }
 
 impl DictPairs {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

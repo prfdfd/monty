@@ -20,7 +20,7 @@ use crate::value::Value;
 ///
 /// Wraps a Rust `String` and provides Python-compatible operations.
 /// `len()` returns the number of Unicode codepoints (characters), matching Python semantics.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Str(String);
 
 impl Str {

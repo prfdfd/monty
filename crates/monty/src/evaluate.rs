@@ -909,7 +909,7 @@ pub enum EvalResult<T> {
 }
 
 /// External function call that needs host resolution.
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExternalCall {
     /// The name of the function being called.
     pub function_id: ExtFunctionId,

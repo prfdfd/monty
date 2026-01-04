@@ -50,7 +50,7 @@ m = monty.Monty(code, inputs=['url'], external_functions=['fetch'])
 result = m.start(inputs={'url': 'https://example.com'})
 
 print(type(result))
-#> <class 'builtins.MontyProgress'>
+#> <class 'monty.MontySnapshot'>
 print(result.function_name)  # fetch
 #> fetch
 print(result.args)
@@ -60,9 +60,38 @@ print(result.args)
 result = result.resume('hello world')
 
 print(type(result))
-#> <class 'builtins.MontyComplete'>
+#> <class 'monty.MontyComplete'>
 print(result.output)
 #> 11
+```
+
+#### Serialization
+
+Both `Monty` and `MontySnapshot` can be serialized to bytes and restored later.
+This allows caching parsed code or suspending execution across process boundaries:
+
+```python
+import monty
+
+# Serialize parsed code to avoid re-parsing
+m = monty.Monty('x + 1', inputs=['x'])
+data = m.dump()
+
+# Later, restore and run
+m2 = monty.Monty.load(data)
+print(m2.run(inputs={'x': 41}))
+#> 42
+
+# Serialize execution state mid-flight
+m = monty.Monty('fetch(url)', inputs=['url'], external_functions=['fetch'])
+progress = m.start(inputs={'url': 'https://example.com'})
+state = progress.dump()
+
+# Later, restore and resume (e.g., in a different process)
+progress2 = monty.MontySnapshot.load(state)
+result = progress2.resume('response data')
+print(result.output)
+#> response data
 ```
 
 ### Rust
@@ -79,7 +108,24 @@ def fib(n):
 fib(x)
 "#;
 
-let snapshot = MontyRun::new(code.to_owned(), "fib.py", vec!["x".to_owned()], vec![]).unwrap();
-let result = snapshot.run(vec![MontyObject::Int(10)], NoLimitTracker::default(), &mut StdPrint).unwrap();
+let runner = MontyRun::new(code.to_owned(), "fib.py", vec!["x".to_owned()], vec![]).unwrap();
+let result = runner.run(vec![MontyObject::Int(10)], NoLimitTracker::default(), &mut StdPrint).unwrap();
 assert_eq!(result, MontyObject::Int(55));
+```
+
+#### Serialization
+
+`MontyRun` and `RunProgress` can be serialized using the `dump()` and `load()` methods:
+
+```rust
+use monty::{MontyRun, MontyObject, NoLimitTracker, StdPrint};
+
+// Serialize parsed code
+let runner = MontyRun::new("x + 1".to_owned(), "main.py", vec!["x".to_owned()], vec![]).unwrap();
+let bytes = runner.dump().unwrap();
+
+// Later, restore and run
+let runner2 = MontyRun::load(&bytes).unwrap();
+let result = runner2.run(vec![MontyObject::Int(41)], NoLimitTracker::default(), &mut StdPrint).unwrap();
+assert_eq!(result, MontyObject::Int(42));
 ```

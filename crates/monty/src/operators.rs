@@ -5,7 +5,7 @@ use strum::Display;
 /// Binary operators for arithmetic, bitwise, and boolean operations.
 ///
 /// Uses strum `Display` derive with per-variant serialization for operator symbols.
-#[derive(Clone, Debug, PartialEq, Display)]
+#[derive(Clone, Debug, PartialEq, Display, serde::Serialize, serde::Deserialize)]
 pub enum Operator {
     #[strum(serialize = "+")]
     Add,
@@ -41,7 +41,7 @@ pub enum Operator {
 }
 
 /// Defined separately since these operators always return a bool
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum CmpOperator {
     Eq,
     NotEq,

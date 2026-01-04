@@ -29,7 +29,7 @@ use crate::value::Value;
 /// # Reference Counting
 /// When a tuple is freed, all contained heap references have their refcounts
 /// decremented via `push_stack_ids`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Tuple(Vec<Value>);
 
 impl Tuple {

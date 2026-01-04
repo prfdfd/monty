@@ -39,7 +39,7 @@ pub struct Dict {
     entries: Vec<DictEntry>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct DictEntry {
     key: Value,
     value: Value,
@@ -606,5 +606,25 @@ impl PyTrait for Dict {
             }
             _ => Err(ExcType::attribute_error(Type::Dict, attr)),
         }
+    }
+}
+
+// Custom serde implementation for Dict.
+// Only serializes entries; rebuilds the indices hash table on deserialize.
+impl serde::Serialize for Dict {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Dict {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let entries: Vec<DictEntry> = Vec::deserialize(deserializer)?;
+        // Rebuild the indices hash table from the entries
+        let mut indices = HashTable::with_capacity(entries.len());
+        for (idx, entry) in entries.iter().enumerate() {
+            indices.insert_unique(entry.hash, idx, |&i| entries[i].hash);
+        }
+        Ok(Self { indices, entries })
     }
 }
