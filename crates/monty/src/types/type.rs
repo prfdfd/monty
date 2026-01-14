@@ -1,4 +1,6 @@
-use strum::{Display, EnumString, IntoStaticStr};
+use std::fmt;
+
+use strum::{EnumString, IntoStaticStr};
 
 use crate::{
     args::ArgValues,
@@ -15,9 +17,11 @@ use crate::{
 /// This enum is used both for type checking and as a callable constructor.
 /// When parsed from a string (e.g., "list", "dict"), it can be used to create
 /// new instances of that type.
-#[derive(
-    Debug, Clone, Copy, Display, EnumString, IntoStaticStr, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
-)]
+///
+/// Note: `Display` is implemented manually because `Dataclass` and `Exception` variants
+/// are disabled for strum's `EnumString` (they can't be parsed from strings), but we still
+/// need to display them in error messages.
+#[derive(Debug, Clone, Copy, EnumString, IntoStaticStr, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[strum(serialize_all = "lowercase")]
 #[allow(clippy::enum_variant_names)]
 pub enum Type {
@@ -50,6 +54,34 @@ pub enum Type {
     Iterator,
     /// used when we can't infer the type, this should be removed or very rare
     Unknown,
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ellipsis => f.write_str("ellipsis"),
+            Self::Type => f.write_str("type"),
+            Self::NoneType => f.write_str("NoneType"),
+            Self::Bool => f.write_str("bool"),
+            Self::Int => f.write_str("int"),
+            Self::Float => f.write_str("float"),
+            Self::Range => f.write_str("range"),
+            Self::Str => f.write_str("str"),
+            Self::Bytes => f.write_str("bytes"),
+            Self::List => f.write_str("list"),
+            Self::Tuple => f.write_str("tuple"),
+            Self::Dict => f.write_str("dict"),
+            Self::Set => f.write_str("set"),
+            Self::FrozenSet => f.write_str("frozenset"),
+            Self::Dataclass => f.write_str("dataclass"),
+            Self::Exception(exc_type) => write!(f, "{exc_type}"),
+            Self::Function => f.write_str("function"),
+            Self::BuiltinFunction => f.write_str("builtin_function_or_method"),
+            Self::Cell => f.write_str("cell"),
+            Self::Iterator => f.write_str("iterator"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
 }
 
 impl Type {
