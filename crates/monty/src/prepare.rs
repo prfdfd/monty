@@ -295,6 +295,27 @@ impl<'i> Prepare<'i> {
                     let (target, _) = self.get_id(target);
                     new_nodes.push(Node::Assign { target, object });
                 }
+                Node::UnpackAssign {
+                    targets,
+                    targets_position,
+                    object,
+                } => {
+                    let object = self.prepare_expression(object)?;
+                    // Track that each target name was assigned and resolve identifiers
+                    let targets = targets
+                        .into_iter()
+                        .map(|target| {
+                            self.names_assigned_in_order
+                                .insert(self.interner.get_str(target.name_id).to_string());
+                            self.get_id(target).0
+                        })
+                        .collect();
+                    new_nodes.push(Node::UnpackAssign {
+                        targets,
+                        targets_position,
+                        object,
+                    });
+                }
                 Node::OpAssign { target, op, object } => {
                     // Track that this name was assigned
                     self.names_assigned_in_order
@@ -1098,6 +1119,11 @@ fn collect_scope_info_from_node(
         Node::Assign { target, .. } => {
             assigned_names.insert(interner.get_str(target.name_id).to_string());
         }
+        Node::UnpackAssign { targets, .. } => {
+            for target in targets {
+                assigned_names.insert(interner.get_str(target.name_id).to_string());
+            }
+        }
         Node::OpAssign { target, .. } => {
             assigned_names.insert(interner.get_str(target.name_id).to_string());
         }
@@ -1272,6 +1298,9 @@ fn collect_referenced_names_from_node(node: &ParseNode, referenced: &mut AHashSe
             }
         }
         Node::Assign { object, .. } => {
+            collect_referenced_names_from_expr(object, referenced, interner);
+        }
+        Node::UnpackAssign { object, .. } => {
             collect_referenced_names_from_expr(object, referenced, interner);
         }
         Node::OpAssign { target, object, .. } => {

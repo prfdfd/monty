@@ -7,7 +7,7 @@ use crate::{
     intern::StringId,
     io::PrintWriter,
     resource::ResourceTracker,
-    types::{Dict, List, PyTrait, Set, Str, Tuple},
+    types::{Dict, List, PyTrait, Set, Str, Tuple, Type},
     value::Value,
 };
 
@@ -269,23 +269,41 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
     // ========================================================================
 
     /// Unpacks a sequence into n values on the stack.
+    ///
+    /// Supports lists, tuples, and strings. For strings, each character becomes
+    /// a separate single-character string.
     pub(super) fn unpack_sequence(&mut self, count: usize) -> Result<(), RunError> {
         let value = self.pop();
 
-        // First, copy values without incrementing refcounts (avoids borrow conflict)
-        let items: Vec<Value> = if let Value::Ref(heap_id) = &value {
-            match self.heap.get(*heap_id) {
+        // Copy values without incrementing refcounts (avoids borrow conflict with heap.get).
+        // For strings, we allocate new string values for each character.
+        let items: Vec<Value> = match &value {
+            // Interned strings (string literals stored inline, not on heap)
+            Value::InternString(string_id) => {
+                let s = self.interns.get_str(*string_id);
+                let str_len = s.chars().count();
+                if str_len != count {
+                    return Err(unpack_size_error(count, str_len));
+                }
+                // Allocate each character as a new string
+                let mut items = Vec::with_capacity(str_len);
+                for c in s.chars() {
+                    let char_id = self.heap.allocate(HeapData::Str(Str::new(c.to_string())))?;
+                    items.push(Value::Ref(char_id));
+                }
+                // Push items in reverse order so first item is on top
+                for item in items.into_iter().rev() {
+                    self.push(item);
+                }
+                return Ok(());
+            }
+            // Heap-allocated sequences
+            Value::Ref(heap_id) => match self.heap.get(*heap_id) {
                 HeapData::List(list) => {
                     let list_len = list.len();
                     if list_len != count {
                         value.drop_with_heap(self.heap);
-                        return Err(SimpleException::new(
-                            ExcType::ValueError,
-                            Some(format!(
-                                "not enough values to unpack (expected {count}, got {list_len})"
-                            )),
-                        )
-                        .into());
+                        return Err(unpack_size_error(count, list_len));
                     }
                     list.as_vec().iter().map(Value::copy_for_extend).collect()
                 }
@@ -293,34 +311,58 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
                     let tuple_len = tuple.as_vec().len();
                     if tuple_len != count {
                         value.drop_with_heap(self.heap);
-                        return Err(SimpleException::new(
-                            ExcType::ValueError,
-                            Some(format!(
-                                "not enough values to unpack (expected {count}, got {tuple_len})"
-                            )),
-                        )
-                        .into());
+                        return Err(unpack_size_error(count, tuple_len));
                     }
                     tuple.as_vec().iter().map(Value::copy_for_extend).collect()
                 }
-                _ => {
+                HeapData::Str(s) => {
+                    let str_len = s.as_str().chars().count();
+                    if str_len != count {
+                        value.drop_with_heap(self.heap);
+                        return Err(unpack_size_error(count, str_len));
+                    }
+                    // Collect characters first to avoid borrow conflict with heap
+                    let chars: Vec<char> = s.as_str().chars().collect();
+                    // Drop the original string value before allocating new ones
                     value.drop_with_heap(self.heap);
-                    return Err(ExcType::type_error("cannot unpack non-sequence"));
+                    // Allocate each character as a new string
+                    let mut items = Vec::with_capacity(chars.len());
+                    for c in chars {
+                        let char_id = self.heap.allocate(HeapData::Str(Str::new(c.to_string())))?;
+                        items.push(Value::Ref(char_id));
+                    }
+                    // Push items in reverse order so first item is on top
+                    for item in items.into_iter().rev() {
+                        self.push(item);
+                    }
+                    return Ok(());
                 }
+                other => {
+                    let type_name = other.py_type(Some(self.heap));
+                    value.drop_with_heap(self.heap);
+                    return Err(unpack_type_error(type_name));
+                }
+            },
+            // Non-iterable types
+            _ => {
+                let type_name = value.py_type(Some(self.heap));
+                value.drop_with_heap(self.heap);
+                return Err(unpack_type_error(type_name));
             }
-        } else {
-            value.drop_with_heap(self.heap);
-            return Err(ExcType::type_error("cannot unpack non-sequence"));
         };
 
-        value.drop_with_heap(self.heap);
-
-        // Now increment refcounts for all copied values
+        // IMPORTANT: Increment refcounts BEFORE dropping the container.
+        // The container holds references to its items. If we drop the container first,
+        // it decrements the item refcounts, potentially freeing them before we can
+        // increment the refcounts for our copies.
         for item in &items {
             if let Value::Ref(id) = item {
                 self.heap.inc_ref(*id);
             }
         }
+
+        // Now safe to drop the original container
+        value.drop_with_heap(self.heap);
 
         // Push items in reverse order so first item is on top
         for item in items.into_iter().rev() {
@@ -328,4 +370,27 @@ impl<T: ResourceTracker, P: PrintWriter> VM<'_, T, P> {
         }
         Ok(())
     }
+}
+
+/// Creates the appropriate ValueError for unpacking size mismatches.
+///
+/// Python uses different messages depending on whether there are too few or too many values:
+/// - Too few: "not enough values to unpack (expected X, got Y)"
+/// - Too many: "too many values to unpack (expected X, got Y)"
+fn unpack_size_error(expected: usize, actual: usize) -> RunError {
+    let message = if actual < expected {
+        format!("not enough values to unpack (expected {expected}, got {actual})")
+    } else {
+        format!("too many values to unpack (expected {expected}, got {actual})")
+    };
+    SimpleException::new(ExcType::ValueError, Some(message)).into()
+}
+
+/// Creates a TypeError for attempting to unpack a non-iterable type.
+fn unpack_type_error(type_name: Type) -> RunError {
+    SimpleException::new(
+        ExcType::TypeError,
+        Some(format!("cannot unpack non-iterable {type_name} object")),
+    )
+    .into()
 }

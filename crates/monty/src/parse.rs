@@ -371,7 +371,7 @@ impl<'a> Parser<'a> {
 
     /// `lhs = rhs` -> `lhs, rhs`
     /// Handles simple assignments (x = value), subscript assignments (dict[key] = value),
-    /// and attribute assignments (obj.attr = value)
+    /// attribute assignments (obj.attr = value), and tuple unpacking (a, b = value)
     fn parse_assignment(&mut self, lhs: AstExpr, rhs: AstExpr) -> Result<ParseNode, ParseError> {
         match lhs {
             // Subscript assignment like dict[key] = value
@@ -387,6 +387,19 @@ impl<'a> Parser<'a> {
                 target_position: self.convert_range(range),
                 value: self.parse_expression(rhs)?,
             }),
+            // Tuple unpacking like a, b = value
+            AstExpr::Tuple(ast::ExprTuple { elts, range, .. }) => {
+                let targets_position = self.convert_range(range);
+                let targets = elts
+                    .into_iter()
+                    .map(|e| self.parse_identifier(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Node::UnpackAssign {
+                    targets,
+                    targets_position,
+                    object: self.parse_expression(rhs)?,
+                })
+            }
             // Simple identifier assignment like x = value
             _ => Ok(Node::Assign {
                 target: self.parse_identifier(lhs)?,

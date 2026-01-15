@@ -221,6 +221,23 @@ impl<'a> Compiler<'a> {
                 self.compile_store(target);
             }
 
+            Node::UnpackAssign {
+                targets,
+                targets_position,
+                object,
+            } => {
+                self.compile_expr(object)?;
+                let count = u8::try_from(targets.len()).expect("too many targets in unpack");
+                // Set location to targets for proper caret in tracebacks
+                self.code.set_location(*targets_position, None);
+                self.code.emit_u8(Opcode::UnpackSequence, count);
+                // After UnpackSequence, values are on stack with first item on top
+                // Store them in order (first target gets first item)
+                for target in targets {
+                    self.compile_store(target);
+                }
+            }
+
             Node::OpAssign { target, op, object } => {
                 self.compile_name(target);
                 self.compile_expr(object)?;

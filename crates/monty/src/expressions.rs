@@ -248,6 +248,16 @@ pub enum Node<F> {
         target: Identifier,
         object: ExprLoc,
     },
+    /// Tuple unpacking assignment (e.g., `a, b = some_tuple`).
+    ///
+    /// The right-hand side is evaluated, then unpacked into the targets in order.
+    /// The number of targets must match the length of the sequence being unpacked.
+    UnpackAssign {
+        targets: Vec<Identifier>,
+        /// Source position covering all targets (for error message caret placement)
+        targets_position: CodeRange,
+        object: ExprLoc,
+    },
     OpAssign {
         target: Identifier,
         op: Operator,
