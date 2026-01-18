@@ -128,9 +128,10 @@ len(result)
 /// Test that allocation limits return an error.
 #[test]
 fn allocation_limit_exceeded() {
+    // Use multi-character strings to ensure heap allocation (single ASCII chars are interned)
     let code = r"
 result = []
-for i in range(11):
+for i in range(100, 115):
     result.append(str(i))
 result
 ";
@@ -151,6 +152,7 @@ result
 
 #[test]
 fn allocation_limit_not_exceeded() {
+    // Single-digit strings are interned (no allocation), so this uses minimal heap
     let code = r"
 result = []
 for i in range(9):
@@ -159,8 +161,9 @@ result
 ";
     let ex = MontyRun::new(code.to_owned(), "test.py", vec![], vec![]).unwrap();
 
-    // Allocations: list (1) + range (1) + iterator (1) + str(0)...str(8) (9) = 12
-    let limits = ResourceLimits::new().max_allocations(12);
+    // Allocations: list (1) + range (1) + iterator (1) = 3
+    // Note: str(0)...str(8) are single ASCII chars, so they use pre-interned strings
+    let limits = ResourceLimits::new().max_allocations(5);
     let result = ex.run(vec![], LimitedTracker::new(limits), &mut StdPrint);
 
     // Should succeed
@@ -294,7 +297,9 @@ len(result)
 fn executor_iter_resource_limit_on_resume() {
     // Test that resource limits are enforced across function calls
     // First function call succeeds, but resumed execution exceeds limit
-    let code = "foo(1)\nx = []\nfor i in range(10):\n    x.append(str(i))\nlen(x)";
+
+    // f-string to create multi-char strings (not interned)
+    let code = "foo(1)\nx = []\nfor i in range(10):\n    x.append(f'x{i}')\nlen(x)";
     let run = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
 
     // First function call should succeed with generous limit
@@ -325,7 +330,9 @@ fn executor_iter_resource_limit_on_resume() {
 )]
 fn executor_iter_resource_limit_before_function_call() {
     // Test that resource limits are enforced before first function call
-    let code = "x = []\nfor i in range(10):\n    x.append(str(i))\nfoo(len(x))\n42";
+
+    // f-string to create multi-char strings (not interned)
+    let code = "x = []\nfor i in range(10):\n    x.append(f'x{i}')\nfoo(len(x))\n42";
     let run = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
 
     // Should fail before reaching the function call
@@ -339,6 +346,21 @@ fn executor_iter_resource_limit_before_function_call() {
         exc.message().is_some_and(|m| m.contains("allocation limit exceeded")),
         "expected allocation limit error, got: {exc}"
     );
+}
+
+#[test]
+#[cfg_attr(
+    feature = "ref-count-panic",
+    ignore = "resource exhaustion doesn't guarantee heap state consistency"
+)]
+fn char_f_string_not_allocated() {
+    // Single character f-string interned not not allocated
+
+    let code = "x = []\nfor i in range(10):\n    x.append(f'{i}')";
+    let run = MontyRun::new(code.to_owned(), "test.py", vec![], vec!["foo".to_owned()]).unwrap();
+
+    let limits = ResourceLimits::new().max_allocations(3);
+    run.run(vec![], LimitedTracker::new(limits), &mut StdPrint).unwrap();
 }
 
 #[test]

@@ -539,7 +539,7 @@ impl ExcType {
 
     /// Creates a simple TypeError with a custom message.
     #[must_use]
-    pub(crate) fn type_error(msg: &str) -> RunError {
+    pub(crate) fn type_error(msg: impl Into<String>) -> RunError {
         SimpleException::new_msg(Self::TypeError, msg).into()
     }
 
@@ -833,6 +833,46 @@ impl ExcType {
     #[must_use]
     pub(crate) fn type_error_join_not_iterable() -> RunError {
         SimpleException::new_msg(Self::TypeError, "can only join an iterable").into()
+    }
+
+    /// Creates a ValueError for str.index()/str.rindex() when substring is not found.
+    ///
+    /// Matches CPython's format: `ValueError: substring not found`
+    #[must_use]
+    pub(crate) fn value_error_substring_not_found() -> RunError {
+        SimpleException::new_msg(Self::ValueError, "substring not found").into()
+    }
+
+    /// Creates a ValueError for str.partition()/str.rpartition() with empty separator.
+    ///
+    /// Matches CPython's format: `ValueError: empty separator`
+    #[must_use]
+    pub(crate) fn value_error_empty_separator() -> RunError {
+        SimpleException::new_msg(Self::ValueError, "empty separator").into()
+    }
+
+    /// Creates a TypeError for fillchar argument that is not a single character.
+    ///
+    /// Matches CPython's format: `TypeError: The fill character must be exactly one character long`
+    #[must_use]
+    pub(crate) fn type_error_fillchar_must_be_single_char() -> RunError {
+        SimpleException::new_msg(Self::TypeError, "The fill character must be exactly one character long").into()
+    }
+
+    /// Creates a LookupError for unknown encoding.
+    ///
+    /// Matches CPython's format: `LookupError: unknown encoding: {encoding}`
+    #[must_use]
+    pub(crate) fn lookup_error_unknown_encoding(encoding: &str) -> RunError {
+        SimpleException::new_msg(Self::LookupError, format!("unknown encoding: {encoding}")).into()
+    }
+
+    /// Creates a LookupError for unknown error handler.
+    ///
+    /// Matches CPython's format: `LookupError: unknown error handler name '{name}'`
+    #[must_use]
+    pub(crate) fn lookup_error_unknown_error_handler(name: &str) -> RunError {
+        SimpleException::new_msg(Self::LookupError, format!("unknown error handler name '{name}'")).into()
     }
 }
 

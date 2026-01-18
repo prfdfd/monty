@@ -26,13 +26,17 @@ pub struct StringId(u32);
 pub const MODULE_STRING_ID: StringId = StringId(0);
 
 /// update MAX_ATTR_ID when adding new attrs
-const MAX_ATTR_ID: u32 = 21;
+const MAX_ATTR_ID: u32 = 61;
+
+/// The StringId for the empty string `""` - interned for allocation-free empty string returns.
+pub const EMPTY_STRING: StringId = StringId(MAX_ATTR_ID + 1);
 
 /// Number of ASCII single-character strings pre-interned at startup.
 const ASCII_STRING_COUNT: u32 = 128;
 
 /// First StringId reserved for ASCII single-character interns.
-const ASCII_STRING_START_ID: u32 = MAX_ATTR_ID + 1;
+/// Starts after MAX_ATTR_ID and EMPTY_STRING.
+const ASCII_STRING_START_ID: u32 = MAX_ATTR_ID + 2;
 
 /// Static strings for all 128 ASCII characters, built once on first access.
 ///
@@ -47,6 +51,12 @@ static ASCII_STRS: LazyLock<[&'static str; 128]> = LazyLock::new(|| {
         &*Box::leak(s.into_boxed_str())
     })
 });
+
+/// Base interner with all pre-interned strings, built once on first access.
+///
+/// Contains `<module>`, all attribute names, and ASCII single-character strings.
+/// `InternerBuilder::new()` clones this to avoid rebuilding the base set each time.
+static BASE_INTERNER: LazyLock<InternerBuilder> = LazyLock::new(InternerBuilder::build_base);
 
 /// Returns the interned StringId for an ASCII byte.
 ///
@@ -100,7 +110,54 @@ pub mod attr {
     pub const ISDISJOINT: StringId = StringId(20);
 
     // String methods
-    pub const JOIN: StringId = StringId(MAX_ATTR_ID);
+    pub const JOIN: StringId = StringId(21);
+    // Phase 1: Simple transformations
+    pub const LOWER: StringId = StringId(22);
+    pub const UPPER: StringId = StringId(23);
+    pub const CAPITALIZE: StringId = StringId(24);
+    pub const TITLE: StringId = StringId(25);
+    pub const SWAPCASE: StringId = StringId(26);
+    pub const CASEFOLD: StringId = StringId(27);
+    // Phase 2: Predicate methods
+    pub const ISALPHA: StringId = StringId(28);
+    pub const ISDIGIT: StringId = StringId(29);
+    pub const ISALNUM: StringId = StringId(30);
+    pub const ISNUMERIC: StringId = StringId(31);
+    pub const ISSPACE: StringId = StringId(32);
+    pub const ISLOWER: StringId = StringId(33);
+    pub const ISUPPER: StringId = StringId(34);
+    pub const ISASCII: StringId = StringId(35);
+    pub const ISDECIMAL: StringId = StringId(36);
+    // Phase 3: Search methods
+    pub const FIND: StringId = StringId(37);
+    pub const RFIND: StringId = StringId(38);
+    pub const INDEX: StringId = StringId(39);
+    pub const RINDEX: StringId = StringId(40);
+    pub const COUNT: StringId = StringId(41);
+    pub const STARTSWITH: StringId = StringId(42);
+    pub const ENDSWITH: StringId = StringId(43);
+    // Phase 4: Strip/trim methods
+    pub const STRIP: StringId = StringId(44);
+    pub const LSTRIP: StringId = StringId(45);
+    pub const RSTRIP: StringId = StringId(46);
+    pub const REMOVEPREFIX: StringId = StringId(47);
+    pub const REMOVESUFFIX: StringId = StringId(48);
+    // Phase 5: Split methods
+    pub const SPLIT: StringId = StringId(49);
+    pub const RSPLIT: StringId = StringId(50);
+    pub const SPLITLINES: StringId = StringId(51);
+    pub const PARTITION: StringId = StringId(52);
+    pub const RPARTITION: StringId = StringId(53);
+    // Phase 6: Replace/modify methods
+    pub const REPLACE: StringId = StringId(54);
+    pub const CENTER: StringId = StringId(55);
+    pub const LJUST: StringId = StringId(56);
+    pub const RJUST: StringId = StringId(57);
+    pub const ZFILL: StringId = StringId(58);
+    // Additional methods
+    pub const ENCODE: StringId = StringId(59);
+    pub const ISIDENTIFIER: StringId = StringId(60);
+    pub const ISTITLE: StringId = StringId(MAX_ATTR_ID);
 }
 
 impl StringId {
@@ -181,7 +238,7 @@ impl ExtFunctionId {
 ///
 /// The interner is not thread-safe. It's designed to be used single-threaded during
 /// parsing/preparation, then the values are accessed read-only during execution.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct InternerBuilder {
     /// Maps strings to their indices for deduplication during interning.
     string_map: AHashMap<Cow<'static, str>, StringId>,
@@ -195,23 +252,43 @@ pub struct InternerBuilder {
 impl InternerBuilder {
     /// Creates a new string interner with pre-interned strings.
     ///
-    /// # Arguments
-    /// * `code` - The code being parsed, used for a very rough guess at how many strings will be interned.
+    /// Clones from a lazily-initialized base interner that contains all pre-interned
+    /// strings (`<module>`, attribute names, ASCII chars). This avoids rebuilding
+    /// the base set on every call.
     ///
-    /// Pre-interns:
+    /// # Arguments
+    /// * `code` - The code being parsed, used for a very rough guess at how many
+    ///   additional strings will be interned beyond the base set.
+    ///
+    /// Pre-interns (via `BASE_INTERNER`):
     /// - Index 0: `"<module>"` for module-level code
     /// - Indices 1-MAX_ATTR_ID: Known attribute names (append, insert, get, join, etc.)
     /// - Indices MAX_ATTR_ID+1..: ASCII single-character strings
     pub fn new(code: &str) -> Self {
-        // very rough guess of the number of strings that will need to be interned
-        // Dividing by 2 since each string has open+close quotes.
-        // This overcounts (escaped quotes, triple quotes) but for capacity that's fine
-        let string_count_guess = (MAX_ATTR_ID + ASCII_STRING_COUNT) as usize
-            + 1
-            + (code.bytes().filter(|&b| b == b'"' || b == b'\'').count() >> 1);
+        // Clone the base interner with all pre-interned strings
+        let mut interner = BASE_INTERNER.clone();
+
+        // Reserve additional capacity for code-specific strings
+        // Rough guess: count quotes and divide by 2 (open+close per string)
+        let additional_strings = code.bytes().filter(|&b| b == b'"' || b == b'\'').count() >> 1;
+        if additional_strings > 0 {
+            interner.string_map.reserve(additional_strings);
+            interner.strings.reserve(additional_strings);
+        }
+
+        interner
+    }
+
+    /// Builds the base interner with all pre-interned strings.
+    ///
+    /// Called once by `BASE_INTERNER` lazy initialization. Contains `<module>`,
+    /// all attribute names, and ASCII single-character strings.
+    fn build_base() -> Self {
+        // +1 for <module>, +1 for empty string
+        let base_count = (MAX_ATTR_ID + ASCII_STRING_COUNT + 2) as usize;
         let mut interner = Self {
-            string_map: AHashMap::with_capacity(string_count_guess),
-            strings: Vec::with_capacity(string_count_guess),
+            string_map: AHashMap::with_capacity(base_count),
+            strings: Vec::with_capacity(base_count),
             bytes: Vec::new(),
         };
 
@@ -219,7 +296,7 @@ impl InternerBuilder {
         let id = interner.intern_static("<module>");
         debug_assert_eq!(id, MODULE_STRING_ID);
 
-        // Pre-intern known attribute names (indices 1-20).
+        // Pre-intern known attribute names.
         // Order must match the attr::* constants defined above.
         // Note: We separate the intern() call from debug_assert_eq! because
         // debug_assert_eq! is completely removed in release builds.
@@ -265,6 +342,97 @@ impl InternerBuilder {
         debug_assert_eq!(id, attr::ISDISJOINT);
         let id = interner.intern_static("join");
         debug_assert_eq!(id, attr::JOIN);
+        // Phase 1: Simple transformations
+        let id = interner.intern_static("lower");
+        debug_assert_eq!(id, attr::LOWER);
+        let id = interner.intern_static("upper");
+        debug_assert_eq!(id, attr::UPPER);
+        let id = interner.intern_static("capitalize");
+        debug_assert_eq!(id, attr::CAPITALIZE);
+        let id = interner.intern_static("title");
+        debug_assert_eq!(id, attr::TITLE);
+        let id = interner.intern_static("swapcase");
+        debug_assert_eq!(id, attr::SWAPCASE);
+        let id = interner.intern_static("casefold");
+        debug_assert_eq!(id, attr::CASEFOLD);
+        // Phase 2: Predicate methods
+        let id = interner.intern_static("isalpha");
+        debug_assert_eq!(id, attr::ISALPHA);
+        let id = interner.intern_static("isdigit");
+        debug_assert_eq!(id, attr::ISDIGIT);
+        let id = interner.intern_static("isalnum");
+        debug_assert_eq!(id, attr::ISALNUM);
+        let id = interner.intern_static("isnumeric");
+        debug_assert_eq!(id, attr::ISNUMERIC);
+        let id = interner.intern_static("isspace");
+        debug_assert_eq!(id, attr::ISSPACE);
+        let id = interner.intern_static("islower");
+        debug_assert_eq!(id, attr::ISLOWER);
+        let id = interner.intern_static("isupper");
+        debug_assert_eq!(id, attr::ISUPPER);
+        let id = interner.intern_static("isascii");
+        debug_assert_eq!(id, attr::ISASCII);
+        let id = interner.intern_static("isdecimal");
+        debug_assert_eq!(id, attr::ISDECIMAL);
+        // Phase 3: Search methods
+        let id = interner.intern_static("find");
+        debug_assert_eq!(id, attr::FIND);
+        let id = interner.intern_static("rfind");
+        debug_assert_eq!(id, attr::RFIND);
+        let id = interner.intern_static("index");
+        debug_assert_eq!(id, attr::INDEX);
+        let id = interner.intern_static("rindex");
+        debug_assert_eq!(id, attr::RINDEX);
+        let id = interner.intern_static("count");
+        debug_assert_eq!(id, attr::COUNT);
+        let id = interner.intern_static("startswith");
+        debug_assert_eq!(id, attr::STARTSWITH);
+        let id = interner.intern_static("endswith");
+        debug_assert_eq!(id, attr::ENDSWITH);
+        // Phase 4: Strip/trim methods
+        let id = interner.intern_static("strip");
+        debug_assert_eq!(id, attr::STRIP);
+        let id = interner.intern_static("lstrip");
+        debug_assert_eq!(id, attr::LSTRIP);
+        let id = interner.intern_static("rstrip");
+        debug_assert_eq!(id, attr::RSTRIP);
+        let id = interner.intern_static("removeprefix");
+        debug_assert_eq!(id, attr::REMOVEPREFIX);
+        let id = interner.intern_static("removesuffix");
+        debug_assert_eq!(id, attr::REMOVESUFFIX);
+        // Phase 5: Split methods
+        let id = interner.intern_static("split");
+        debug_assert_eq!(id, attr::SPLIT);
+        let id = interner.intern_static("rsplit");
+        debug_assert_eq!(id, attr::RSPLIT);
+        let id = interner.intern_static("splitlines");
+        debug_assert_eq!(id, attr::SPLITLINES);
+        let id = interner.intern_static("partition");
+        debug_assert_eq!(id, attr::PARTITION);
+        let id = interner.intern_static("rpartition");
+        debug_assert_eq!(id, attr::RPARTITION);
+        // Phase 6: Replace/modify methods
+        let id = interner.intern_static("replace");
+        debug_assert_eq!(id, attr::REPLACE);
+        let id = interner.intern_static("center");
+        debug_assert_eq!(id, attr::CENTER);
+        let id = interner.intern_static("ljust");
+        debug_assert_eq!(id, attr::LJUST);
+        let id = interner.intern_static("rjust");
+        debug_assert_eq!(id, attr::RJUST);
+        let id = interner.intern_static("zfill");
+        debug_assert_eq!(id, attr::ZFILL);
+        // Additional methods
+        let id = interner.intern_static("encode");
+        debug_assert_eq!(id, attr::ENCODE);
+        let id = interner.intern_static("isidentifier");
+        debug_assert_eq!(id, attr::ISIDENTIFIER);
+        let id = interner.intern_static("istitle");
+        debug_assert_eq!(id, attr::ISTITLE);
+
+        // Pre-intern the empty string for allocation-free empty string returns
+        let id = interner.intern_static("");
+        debug_assert_eq!(id, EMPTY_STRING);
 
         // Pre-intern ASCII single-character strings so string iteration can reuse interns.
         for byte in 0u8..=127 {
